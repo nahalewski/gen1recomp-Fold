@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=gen1recomp
+Comment=Pokémon Gen 1/2 recompilation
+Exec=gen1recomp
+Icon=com.theboisclub.gen1recomp
+Terminal=false
+Categories=Game;
+StartupWMClass=love

@@ -1,0 +1,78 @@
+name: platform artifact comment
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+
+concurrency:
+  group: platform-artifact-comment-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  comment:
+    if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - id: artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+        run: |
+          set -euo pipefail
+          artifacts="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts")"
+          head_owner="${HEAD_REPOSITORY%%/*}"
+          pr_number="$(gh api "repos/$GITHUB_REPOSITORY/pulls?state=open&head=$head_owner:$HEAD_BRANCH" --jq '.[0].number // empty')"
+          [ -n "$pr_number" ] || exit 0
+
+          message="## CI build artifacts"
+          found=0
+          while IFS='|' read -r platform artifact_name artifact_file; do
+            artifact_id="$(printf '%s' "$artifacts" | jq -r --arg name "$artifact_name" '[.artifacts[] | select(.name == $name) | .id][0] // empty')"
+            if [ -n "$artifact_id" ] && [ "$artifact_id" != null ]; then
+              artifact_url="https://github.com/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts/$artifact_id"
+              message+=$'\n'"- **$platform**: [$artifact_file]($artifact_url)"
+              found=1
+            fi
+          done <<'ARTIFACTS'
+          macOS|gen1recomp++-macos|gen1recomp++-macos.zip
+          Windows|gen1recomp-win64|gen1recomp-win64.zip
+          Linux x86_64|gen1recomp-linux-x86_64|gen1recomp-linux-x86_64.AppImage
+          Android|gen1recomp-android-apk|gen1recomp-android.apk
+          iOS|gen1recomp++-ios-ipa|gen1recomp++.ipa
+          Nintendo Switch|gen1recomp-switch-nro|gen1recomp-switch.nro
+          Xbox UWP|gen1recomp-xbox-uwp|gen1recomp-xbox-uwp.zip
+          Linux arm64|gen1recomp-linux-arm64|gen1recomp-linux-arm64.AppImage
+          Linux Flatpak|gen1recomp-linux-flatpak|gen1recomp-linux.flatpak
+          RG34XXSP|gen1recomp-rg34xxsp|gen1recomp-rg34xxsp-stockos64-mod.zip
+          Linux ARM SBC|gen1recomp-linux-arm-sbc|gen1recomp-sbc-portmaster.zip
+          ARTIFACTS
+
+          [ "$found" -eq 1 ] || exit 0
+          commit_hash="$(printf '%s' "${{ github.event.workflow_run.head_sha }}" | cut -c1-7)"
+          build_time="$(date -u "+%Y-%m-%d %H:%M:%S UTC")"
+          message+=$'\n\n'"**Commit**: [#$commit_hash](https://github.com/$HEAD_REPOSITORY/commit/${{ github.event.workflow_run.head_sha }})"
+          message+=$'\n'"**Build Time**: \`$build_time\`"
+          message+=$'\n\n'"<sub>This comment was automatically generated. [View workflow run](https://github.com/$GITHUB_REPOSITORY/actions/runs/$RUN_ID)</sub>"
+
+          echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+          {
+            echo 'message<<BUILD_MESSAGE'
+            printf '%s\n' "$message"
+            echo 'BUILD_MESSAGE'
+          } >> "$GITHUB_OUTPUT"
+      - name: comment platform artifacts
+        if: steps.artifacts.outputs.pr_number != ''
+        uses: thollander/actions-comment-pull-request@v3
+        with:
+          message: ${{ steps.artifacts.outputs.message }}
+          pr-number: ${{ steps.artifacts.outputs.pr_number }}
+          comment-tag: platform-build-result
+          github-token: ${{ github.token }}

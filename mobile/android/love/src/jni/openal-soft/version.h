@@ -1,0 +1,6 @@
+#define ALSOFT_VERSION "1.24.0"
+#define ALSOFT_VERSION_NUM 1,24,0,0
+
+#define ALSOFT_GIT_BRANCH "HEAD"
+
+#define ALSOFT_GIT_COMMIT_HASH "unknown"

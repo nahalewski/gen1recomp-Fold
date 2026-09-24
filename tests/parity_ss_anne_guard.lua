@@ -1,0 +1,237 @@
+-- Parity test: Vermilion City S.S. Anne sailor (#122).
+--
+-- pokered VermilionCityDefaultScript (scripts/VermilionCity.asm):
+-- stepping onto SSAnneTicketCheckCoords (18,30) facing down always
+-- DisplayTextID's the sailor.  With a ticket and the ship still docked,
+-- FlashedTicket plays and the player may continue; without a ticket, or
+-- after EVENT_SS_ANNE_LEFT, they are walked back up.
+--
+-- The port used to early-return when the ticket was in the bag, skipping
+-- the flash dialog entirely.
+--
+-- Self-contained; run via `luajit tests/parity_ss_anne_guard.lua`.
+package.path = "./?.lua;./?/init.lua;" .. package.path
+if not _G.love then _G.love = require("tests.love_stub") end
+local S = require("tests.harness").suite("parity ss anne guard")
+local check, eq = S.check, S.eq
+
+-- restored at the bottom for the suites run after this file
+local realTextBox = package.loaded["src.render.TextBox"]
+local realMusic = package.loaded["src.core.Music"]
+local realSound = package.loaded["src.core.Sound"]
+-- Commands captures TextBox at module load; drop any already-loaded copy
+-- so the script runner below binds the stub, not the real renderer
+local realCommands = package.loaded["src.script.Commands"]
+local realScriptRunner = package.loaded["src.script.ScriptRunner"]
+package.loaded["src.script.Commands"] = nil
+package.loaded["src.script.ScriptRunner"] = nil
+package.loaded["src.render.TextBox"] = {
+  new = function(_, text, done) return { text = text, done = done } end,
+}
+
+local musicCalls = {}
+package.loaded["src.core.Music"] = {
+  stop = function() musicCalls[#musicCalls + 1] = { "stop" } end,
+  play = function(_, song)
+    musicCalls[#musicCalls + 1] = { "play", song }
+  end,
+  playOnce = function(_, song)
+    musicCalls[#musicCalls + 1] = { "playOnce", song }
+    return true
+  end,
+  playMap = function() end,
+}
+
+local soundCalls = {}
+package.loaded["src.core.Sound"] = {
+  play = function(_, id) soundCalls[#soundCalls + 1] = id end,
+}
+
+local story = dofile("data/scripts/story.lua")
+local story3 = dofile("data/scripts/story3.lua")
+local Flags = require("src.script.Flags")
+
+local function gameWith(opts)
+  local pushed, moved = {}, {}
+  local game = {
+    save = {
+      inventory = opts.inventory or {},
+      flags = opts.flags or {},
+    },
+    data = {
+      text = {
+        _VermilionCitySailor1DoYouHaveATicketText =
+          "Welcome to S.S.\nANNE!\fExcuse me, do you\nhave a ticket?",
+        _VermilionCitySailor1FlashedTicketText =
+          "PLAYER flashed\nthe S.S.TICKET!",
+        _VermilionCitySailor1YouNeedATicketText =
+          "You need a ticket\nto get aboard.",
+        _VermilionCitySailor1ShipSetSailText = "The ship set sail.",
+        _VermilionCitySailor1WelcomeToSSAnneText = "Welcome to S.S.\nANNE!",
+        _SSAnneCaptainsRoomRubCaptainsBackText = "Rub-rub...",
+        _SSAnneCaptainsRoomCaptainIFeelMuchBetterText = "I feel better!",
+        _SSAnneCaptainsRoomCaptainReceivedHM01Text = "Got HM01!",
+        _SSAnneCaptainsRoomCaptainNotSickAnymoreText = "Not sick.",
+      },
+    },
+    stack = { push = function(_, box) pushed[#pushed + 1] = box end },
+    _pushed = pushed,
+    _moved = moved,
+  }
+  return game, pushed, moved
+end
+
+local function owWith(moved)
+  return {
+    player = { facing = "down", cellX = 14, cellY = 2 },
+    scriptMove = function(_, _, dir, n) moved[#moved + 1] = { dir, n } end,
+    queueScript = function(self, rows) self._queued = rows end,
+    startDustAnim = function() end,
+    map = {
+      setBlock = function() end,
+      renderer = { rebuild = function() end },
+    },
+  }
+end
+
+local city = story.VERMILION_CITY
+check(city and city.onStep, "VERMILION_CITY has the sailor coord trigger")
+
+-- With ticket, ship still docked: flash dialog, do NOT walk back.
+do
+  local game, pushed, moved = gameWith({ inventory = { S_S_TICKET = 1 } })
+  local ow = owWith(moved)
+  check(city.onStep(game, ow, 18, 30), "ticket: walk-past trigger consumes the step")
+  check(#pushed == 1, "ticket: auto dialog is shown")
+  check(pushed[1].text:find("flashed", 1, true)
+        or pushed[1].text:find("ticket", 1, true),
+        "ticket: flash / ticket-check dialog text")
+  check(#moved == 0, "ticket: player is not walked back")
+end
+
+-- Without ticket: dialog + walk back.
+do
+  local game, pushed, moved = gameWith({})
+  local ow = owWith(moved)
+  check(city.onStep(game, ow, 18, 30), "no ticket: trigger fires")
+  check(#pushed == 1, "no ticket: dialog shown")
+  if pushed[1] and pushed[1].done then pushed[1].done() end
+  check(#moved == 1 and moved[1][1] == "up",
+        "no ticket: walked back up after dialog")
+end
+
+-- After the ship leaves: ShipSetSail + walk back, even with a ticket.
+do
+  local game, pushed, moved = gameWith({
+    inventory = { S_S_TICKET = 1 },
+    flags = { EVENT_SS_ANNE_LEFT = true },
+  })
+  local ow = owWith(moved)
+  check(city.onStep(game, ow, 18, 30), "ship left: trigger still fires")
+  eq(pushed[1] and pushed[1].text, "The ship set sail.",
+     "ship left: dialog updates to ShipSetSail")
+  if pushed[1] and pushed[1].done then pushed[1].done() end
+  check(#moved == 1 and moved[1][1] == "up",
+        "ship left: walked back up")
+end
+
+-- Off-tile / wrong facing: no trigger.
+do
+  local game, pushed = gameWith({ inventory = { S_S_TICKET = 1 } })
+  local ow = owWith({})
+  eq(city.onStep(game, ow, 18, 29), false, "wrong Y: no trigger")
+  ow.player.facing = "up"
+  eq(city.onStep(game, ow, 18, 30), false, "facing up: no trigger")
+  check(#pushed == 0, "no spurious dialog off the check")
+end
+
+-- Sailor talk: once she has sailed he only reports it gone, and before
+-- that an A press is the plain greeting, never the ticket check (#1651).
+-- scripts/VermilionCity.asm:158-198
+do
+  local talk = city.talk.TEXT_VERMILIONCITY_SAILOR1
+  local game, pushed = gameWith({ flags = { EVENT_SS_ANNE_LEFT = true } })
+  talk(game, owWith({}), nil, function() end)
+  eq(pushed[#pushed] and pushed[#pushed].text, "The ship set sail.",
+     "talk after ship left shows ShipSetSail")
+
+  game, pushed = gameWith({})
+  local ow = owWith({})
+  ow.player.cellX, ow.player.cellY, ow.player.facing = 18, 30, "right"
+  talk(game, ow, nil, function() end)
+  eq(pushed[#pushed] and pushed[#pushed].text, "Welcome to S.S.\nANNE!",
+     "facing him from the west is the plain greeting, no ticket check")
+
+  game, pushed = gameWith({})
+  ow = owWith({})
+  ow.player.cellX, ow.player.cellY, ow.player.facing = 19, 29, "down"
+  talk(game, ow, nil, function() end)
+  eq(pushed[#pushed] and pushed[#pushed].text, "Welcome to S.S.\nANNE!",
+     "talking from in front of him is the plain greeting too")
+
+  game, pushed = gameWith({})
+  ow = owWith({})
+  ow.player.cellX, ow.player.cellY, ow.player.facing = 19, 31, "up"
+  talk(game, ow, nil, function() end)
+  eq(pushed[#pushed] and pushed[#pushed].text, "Welcome to S.S.\nANNE!",
+     "and from behind him")
+end
+
+-- Departure cutscene: Music_Surfing + EVENT_SS_ANNE_LEFT via Flags.set.
+do
+  for i = #musicCalls, 1, -1 do musicCalls[i] = nil end
+  local game, _, moved = gameWith({ flags = { EVENT_GOT_HM01 = true } })
+  local ow = owWith(moved)
+  story3.VERMILION_DOCK.onEnter(game, ow)
+  check(Flags.get(game.save, "EVENT_SS_ANNE_LEFT"),
+        "departure sets EVENT_SS_ANNE_LEFT")
+  local sawSurf = false
+  for _, c in ipairs(musicCalls) do
+    if c[1] == "play" and c[2] == "Music_Surfing" then sawSurf = true end
+  end
+  check(sawSurf, "departure plays Music_Surfing")
+  check(ow._queued ~= nil, "departure queues the sail-away script")
+  -- #360: the surf override must NOT ride into Vermilion City, and she
+  -- sails west block by block
+  local kept, horns, sails, shuffled, faced = false, 0, 0, 0, false
+  for _, row in ipairs(ow._queued or {}) do
+    if row[1] == "play_music" and row[3] and row[3].keep then kept = true end
+    if row[1] == "play_sound" and row[2] == "SS_Anne_Horn" then
+      horns = horns + 1
+    end
+    if row[1] == "ss_anne_departs" then sails = sails + 1 end
+    if row[1] == "replace_block" then shuffled = shuffled + 1 end
+    if row[1] == "face_player_dir" and row[2] == "down" then faced = true end
+  end
+  eq(kept, false, "departure lets VERMILION_CITY's own theme take the warp")
+  eq(horns, 2, "the horn blows before and after she sails")
+  eq(sails, 1, "she slides west as one animation, not a block shuffle")
+  eq(shuffled, 0, "and no hull block is stamped across the dock any more")
+  -- scripts/VermilionDock.asm:50 (#1689)
+  eq(faced, true, "he keeps facing down until he walks out")
+end
+
+-- scripts/SSAnneCaptainsRoom.asm:45-68
+do
+  local rows = story.SS_ANNE_CAPTAINS_ROOM.talk.TEXT_SSANNECAPTAINSROOM_CAPTAIN
+  local found = false
+  for i, row in ipairs(rows) do
+    if row[1] == "show_text"
+       and row[2] == "_SSAnneCaptainsRoomRubCaptainsBackText" then
+      local armed = rows[i - 1]
+      check(armed and armed[1] == "text_opts" and armed[2].auto
+            and type(armed[2].auto.sound) == "function",
+            "a text_opts row arms the rub box with the jingle")
+      found = true
+    end
+  end
+  check(found, "captain script still shows the rub-back text")
+end
+
+package.loaded["src.render.TextBox"] = realTextBox
+package.loaded["src.core.Music"] = realMusic
+package.loaded["src.core.Sound"] = realSound
+package.loaded["src.script.Commands"] = realCommands
+package.loaded["src.script.ScriptRunner"] = realScriptRunner
+
+S.finish()

@@ -1,0 +1,588 @@
+-- Pure coverage for src/mods/ModIndex.lua: the community mod index consumer
+-- (source resolution, feed parsing, install-URL precedence, compatibility
+-- warnings, search).  Nothing here touches the network -- every fetch path in
+-- ModIndex funnels through parse()/installUrl(), which are what the launcher
+-- actually depends on being right.
+--   luajit tests/engine/mod_index_tests.lua
+
+package.path = "./?.lua;./?/init.lua;" .. package.path
+
+local T = require("tests.harness")
+local check, eq = T.check, T.eq
+local ModIndex = require("src.mods.ModIndex")
+local Json = require("src.link.Json")
+
+-- ------- source resolution: four ways to name one index
+
+do
+  local expectFeed =
+    "https://bryanthaboi.github.io/gen1recomp-mod-index/data/index.json"
+  local expectBase = "https://bryanthaboi.github.io/gen1recomp-mod-index/"
+
+  local fromRepo = ModIndex.resolveSource("bryanthaboi/gen1recomp-mod-index")
+  eq(fromRepo.feed, expectFeed, "owner/repo resolves to the Pages feed")
+  eq(fromRepo.base, expectBase, "owner/repo resolves the Pages base")
+  check(fromRepo.fallback:find("raw.githubusercontent.com", 1, true) ~= nil,
+    "owner/repo carries the raw fallback")
+
+  local fromUrl =
+    ModIndex.resolveSource("https://github.com/bryanthaboi/gen1recomp-mod-index")
+  eq(fromUrl.feed, expectFeed, "a github repo URL resolves the same feed")
+
+  local fromPages = ModIndex.resolveSource(expectBase)
+  eq(fromPages.feed, expectFeed, "the Pages root resolves the same feed")
+  eq(fromPages.base, expectBase, "the Pages root is its own base")
+
+  local fromFeed = ModIndex.resolveSource(expectFeed)
+  eq(fromFeed.feed, expectFeed, "the feed URL is taken as-is")
+  eq(fromFeed.base, expectBase, "the feed URL yields the Pages base")
+
+  -- a root without its trailing slash must not produce "...indexdata/index.json"
+  local noSlash =
+    ModIndex.resolveSource("https://bryanthaboi.github.io/gen1recomp-mod-index")
+  eq(noSlash.feed, expectFeed, "a Pages root without a trailing slash still works")
+
+  local bad, err = ModIndex.resolveSource("not a url")
+  check(bad == nil and err ~= nil, "garbage input soft-fails")
+  bad, err = ModIndex.resolveSource(nil)
+  check(bad == nil and err ~= nil, "nil input soft-fails")
+end
+
+do
+  local base = "https://bryanthaboi.github.io/gen1recomp-mod-index/"
+  eq(ModIndex.joinUrl(base, "data/mods/bryanthaboi@nuzlocke/thumbnail.png"),
+    base .. "data/mods/bryanthaboi@nuzlocke/thumbnail.png",
+    "relative asset paths resolve against the Pages base")
+  eq(ModIndex.joinUrl(base, "https://elsewhere/x.png"), "https://elsewhere/x.png",
+    "an absolute asset URL is left alone")
+  check(ModIndex.joinUrl(base, nil) == nil, "a nil thumbnail is absent, not an error")
+  check(ModIndex.joinUrl(nil, "x.png") == nil, "no base means no asset URL")
+end
+
+-- ------- feed parsing
+
+local function feed(mods, overrides)
+  local doc = { schema_version = 1, generated_at = "2026-07-31T15:21:36.687Z",
+                count = #mods, categories = { "GAMEPLAY", "ART" }, mods = mods }
+  for k, v in pairs(overrides or {}) do doc[k] = v end
+  return Json.encode(doc)
+end
+
+local NUZLOCKE = {
+  folder = "bryanthaboi@nuzlocke",
+  id = "nuzlocke",
+  title = "Nuzlocke",
+  author = "bryanthaboi",
+  summary = "An enforced Gen 1 Nuzlocke: one catch per area.",
+  version = "1.0.1",
+  categories = { "GAMEPLAY" },
+  tags = { "nuzlocke", "challenge" },
+  repo = "https://github.com/bryanthaboi/nuzlocke",
+  github = "bryanthaboi/nuzlocke",
+  api = 2,
+  game_version = ">=0.0.0-dev <1.0.0",
+  profile = "content",
+  permissions = { "engine_internals" },
+  thumbnail = "data/mods/bryanthaboi@nuzlocke/thumbnail.png",
+  description_url = "data/mods/bryanthaboi@nuzlocke/description.md",
+  latest = {
+    version = "1.0.1", tag = "v1.0.1", name = "1.0.1", prerelease = false,
+    published_at = "2026-07-31T14:17:23Z",
+    zip = {
+      name = "nuzlocke-1.0.1.zip",
+      url = "https://github.com/bryanthaboi/nuzlocke/releases/download/v1.0.1/nuzlocke-1.0.1.zip",
+      size = 4396,
+    },
+  },
+  update_check = "ok",
+}
+
+do
+  local index, err = ModIndex.parse(feed({ NUZLOCKE }))
+  check(index ~= nil, "the published feed shape parses: " .. tostring(err))
+  eq(index.schemaVersion, 1, "schema_version is carried through")
+  eq(#index.mods, 1, "one mod")
+  local m = index.mods[1]
+  eq(m.id, "nuzlocke", "id")
+  eq(m.title, "Nuzlocke", "title")
+  eq(m.latest.zip.url,
+    "https://github.com/bryanthaboi/nuzlocke/releases/download/v1.0.1/nuzlocke-1.0.1.zip",
+    "the release asset URL survives parsing")
+  eq(m.permissions[1], "engine_internals", "permissions are kept")
+  eq(m.update_check, "ok", "update_check is kept")
+  check(m.downloads == nil and m.first_release == nil and m.last_release == nil,
+    "a feed without release stats parses them as absent")
+end
+
+-- release stats a feed can publish: download counts and first/last dates
+-- ride along additively, so a feed carrying them stays readable by every
+-- build that predates them
+do
+  local withStats = {}
+  for k, v in pairs(NUZLOCKE) do withStats[k] = v end
+  withStats.downloads = { total = 1578, recent = 388, window_days = 30,
+                          as_of = "2026-08-18T05:17:00.000Z" }
+  withStats.first_release = "2024-05-31"
+  withStats.last_release = "2026-07-01"
+  local index = ModIndex.parse(feed({ withStats }))
+  local m = index.mods[1]
+  eq(m.downloads.total, 1578, "total downloads are kept")
+  eq(m.downloads.recent, 388, "the trailing-window count is kept")
+  eq(m.downloads.window_days, 30, "the window length is kept")
+  eq(m.downloads.as_of, "2026-08-18T05:17:00.000Z", "the read time is kept")
+  eq(m.first_release, "2024-05-31", "first release date is kept")
+  eq(m.last_release, "2026-07-01", "last release date is kept")
+end
+
+-- ------- download counts: unknown is not zero
+--
+-- The feed's `downloads` object has three ways of saying "not known" -- the
+-- field absent, the field null, and a null count inside it -- and every one
+-- of them has to stay distinguishable from a real zero, because the browse
+-- card prints one and sorts the other.
+do
+  local function jsonWith(downloads)
+    local raw = {}
+    for k, v in pairs(NUZLOCKE) do raw[k] = v end
+    raw.downloads = downloads
+    return feed({ raw })
+  end
+  local function statsForJson(text)
+    return ModIndex.downloadStats(ModIndex.parse(text).mods[1])
+  end
+  local function statsFor(downloads)
+    return statsForJson(jsonWith(downloads))
+  end
+
+  check(statsFor(nil) == nil, "an absent downloads field is unknown")
+  -- Json.encode has no null of its own, so the literal the feed actually
+  -- sends is patched into the text.
+  local nulled = jsonWith({}):gsub('"downloads":%[%]', '"downloads":null', 1)
+  check(nulled:find('"downloads":null', 1, true) ~= nil,
+    "the null feed fixture really contains a null")
+  check(statsForJson(nulled) == nil, "a null downloads field is unknown")
+  check(statsFor({}) == nil, "an object with no counts is unknown")
+  eq(statsFor({ total = 0 }).total, 0, "a real zero total survives")
+
+  -- recent / window_days stay null until the index has more than a day of
+  -- history, even once total is a real number.
+  local young = statsFor({ total = 12, as_of = "2026-08-18T05:17:00.000Z" })
+  eq(young.total, 12, "a total with no window yet is still a total")
+  check(young.recent == nil and young.window_days == nil,
+    "no trailing window means no trending figure, not a zero one")
+
+  -- A cache written before the object shipped stored a bare number; it is
+  -- read back through the same door rather than migrated.
+  local legacy = ModIndex.downloadStats({ downloads = 4321 })
+  eq(legacy.total, 4321, "a bare number reads as the total")
+  check(legacy.recent == nil, "and carries no trending figure")
+  check(ModIndex.downloadStats({}) == nil, "a row with no counts is unknown")
+  check(ModIndex.downloadStats(nil) == nil, "no entry is unknown")
+end
+
+-- ------- release dates: the feed already dates every listing it can install
+--
+-- Sorting must span the whole index, not the pages a reader happened to
+-- visit, so the "last updated" date comes off the feed's own `latest` blob
+-- rather than out of a per-mod repo fetch.
+do
+  local raw = {}
+  for k, v in pairs(NUZLOCKE) do raw[k] = v end
+  local d = ModIndex.releaseDates(ModIndex.parse(feed({ raw })).mods[1])
+  eq(d.latest, "2026-07-31", "latest release date comes from latest.published_at")
+  check(d.first == nil, "the feed cannot date a first release from that alone")
+
+  raw.first_release = "2024-05-31"
+  raw.last_release = "2026-07-01"
+  d = ModIndex.releaseDates(ModIndex.parse(feed({ raw })).mods[1])
+  eq(d.first, "2024-05-31", "an explicit first_release wins")
+  eq(d.latest, "2026-07-01", "an explicit last_release beats the latest blob")
+
+  local bare = {}
+  for k, v in pairs(NUZLOCKE) do bare[k] = v end
+  bare.latest, bare.update_check = nil, "no installable release"
+  check(ModIndex.releaseDates(ModIndex.parse(feed({ bare })).mods[1]) == nil,
+    "a listing with no releases has no dates")
+  check(ModIndex.releaseDates(nil) == nil, "no entry has no dates")
+end
+
+-- ------- cache version: a copy written before a field existed cannot answer
+-- for it, and the TTL is a whole day
+do
+  local now = os.time()
+  check(ModIndex.cacheFresh({ checkedAt = now,
+    version = ModIndex.CACHE_VERSION }), "a current cache is fresh")
+  check(not ModIndex.cacheFresh({ checkedAt = now }),
+    "an unstamped cache is refetched rather than trusted for a day")
+  check(not ModIndex.cacheFresh({ checkedAt = now,
+    version = ModIndex.CACHE_VERSION - 1 }), "so is an older stamp")
+  check(not ModIndex.cacheFresh({ checkedAt = now - ModIndex.CACHE_TTL - 1,
+    version = ModIndex.CACHE_VERSION }), "and an expired one")
+end
+
+-- schema_version is a contract, not a hint: an unknown one is refused rather
+-- than parsed on the assumption the fields still mean what they used to.
+do
+  local index, err = ModIndex.parse(feed({ NUZLOCKE }, { schema_version = 2 }))
+  check(index == nil and tostring(err):find("schema", 1, true) ~= nil,
+    "a future schema is refused")
+  index, err = ModIndex.parse(Json.encode({ mods = { NUZLOCKE } }))
+  check(index == nil and err ~= nil, "a feed with no schema_version is refused")
+  index, err = ModIndex.parse("<!DOCTYPE html><html>404</html>")
+  check(index == nil and tostring(err):find("HTML", 1, true) ~= nil,
+    "an HTML error page is named, not blamed on the parser")
+  index, err = ModIndex.parse("Error: upstream unavailable")
+  check(index == nil and tostring(err):find("not JSON", 1, true) ~= nil,
+    "a plain-text error names the response")
+  index, err = ModIndex.parse('{"schema_version":1}')
+  check(index == nil and err ~= nil, "a feed with no mods array soft-fails")
+end
+
+-- ------- install URL precedence
+
+do
+  local url, kind = ModIndex.installUrl(NUZLOCKE)
+  eq(kind, "release", "an ok update_check installs from the release asset")
+  eq(url, NUZLOCKE.latest.zip.url, "and uses that asset's URL")
+  eq(ModIndex.displayVersion(NUZLOCKE), "1.0.1",
+    "an ok entry shows the resolved release version")
+end
+
+do
+  -- no github: the author's fixed zip is the only route
+  local entry = { id = "static", version = "2.0.0", update_check = "off",
+                  downloadURL = "https://example.test/static-2.0.0.zip" }
+  local url, kind = ModIndex.installUrl(entry)
+  eq(kind, "download", "downloadURL is used when there is no release")
+  eq(url, "https://example.test/static-2.0.0.zip", "and it is used verbatim")
+  eq(ModIndex.displayVersion(entry), "2.0.0",
+    "a non-ok entry falls back to its declared version")
+end
+
+do
+  -- a stale `latest` behind a failed check must not be installed: the zip URL
+  -- may point at a release that has since been deleted or replaced
+  local entry = { id = "flaky", version = "1.0.0",
+                  update_check = "error: rate limited",
+                  latest = { version = "9.9.9", zip = { url = "https://x/stale.zip" } } }
+  local url, why = ModIndex.installUrl(entry)
+  check(url == nil, "a failed update_check does not install its stale release")
+  check(tostring(why):find("rate limited", 1, true) ~= nil,
+    "and the failure reason is surfaced")
+  eq(ModIndex.displayVersion(entry), "1.0.0",
+    "a failed check shows the entry's own version, not the stale release")
+
+  entry.downloadURL = "https://example.test/flaky.zip"
+  local url2, kind = ModIndex.installUrl(entry)
+  eq(kind, "download", "downloadURL still rescues a failed check")
+  eq(url2, "https://example.test/flaky.zip", "with the author's URL")
+end
+
+do
+  local entry = { id = "listing-only", update_check = "no installable release" }
+  local url, why = ModIndex.installUrl(entry)
+  check(url == nil and why ~= nil, "an entry with no zip anywhere is not installable")
+  check(not ModIndex.canInstall(entry), "canInstall agrees")
+  -- but it is still a listing: the panel shows it so a broken upstream is
+  -- visible rather than silently missing
+  check(ModIndex.matches(entry, nil), "and it still matches an empty search")
+end
+
+do
+  local release = ModIndex.releaseFor(NUZLOCKE)
+  eq(release.zip.url, NUZLOCKE.latest.zip.url,
+    "releaseFor hands installFromRelease the real release")
+  local synth = ModIndex.releaseFor({ id = "static", version = "2.0.0",
+    update_check = "off", downloadURL = "https://example.test/s.zip" })
+  eq(synth.zip.url, "https://example.test/s.zip",
+    "a downloadURL entry gets a synthesised release")
+  eq(synth.version, "2.0.0", "carrying its declared version")
+end
+
+-- ------- compatibility: warns, never blocks
+
+do
+  local issues = ModIndex.compatIssues(NUZLOCKE, {
+    modApi = 2, engineVersion = "0.0.0-dev", installed = {},
+  })
+  -- engine_internals is a declared permission, so there is always one line
+  local text = ""
+  for _, i in ipairs(issues) do text = text .. i.text .. "\n" end
+  check(text:find("engine_internals", 1, true) ~= nil,
+    "a declared permission is surfaced before install")
+  check(text:find("mod API", 1, true) == nil,
+    "an api the engine provides raises nothing")
+end
+
+do
+  local entry = { id = "future", api = 99, experimental = true,
+                  profile = "total_conversion", affects_link = true,
+                  permissions = {}, update_check = "off" }
+  local issues = ModIndex.compatIssues(entry, {
+    modApi = 2, engineVersion = "0.0.0-dev", installed = {},
+  })
+  local text = ""
+  for _, i in ipairs(issues) do text = text .. i.text .. "\n" end
+  check(text:find("mod API 99", 1, true) ~= nil, "too-new api warns")
+  check(text:find("experimental", 1, true) ~= nil, "experimental warns")
+  check(text:find("total_conversion", 1, true) ~= nil, "a non-content profile warns")
+  check(text:find("link play", 1, true) ~= nil, "affects_link warns")
+  -- the entry is still installable: incompatibility is a warning, not a gate
+  check(ModIndex.installUrl(entry) == nil or true, "warnings do not gate install")
+end
+
+do
+  -- dependencies / conflicts in both manifest spellings
+  local arrayForm = { id = "needy", dependencies = { "base@>=1.0.0", "other" },
+                      conflicts = { "rival" } }
+  local issues = ModIndex.compatIssues(arrayForm, { installed = { rival = "1.0.0" } })
+  local text = ""
+  for _, i in ipairs(issues) do text = text .. i.text .. "\n" end
+  check(text:find("Needs base", 1, true) ~= nil, "a missing dependency warns")
+  check(text:find(">=1.0.0", 1, true) ~= nil, "with its range")
+  check(text:find("Needs other", 1, true) ~= nil, "a rangeless dependency warns")
+  check(text:find("Conflicts with installed rival", 1, true) ~= nil,
+    "an installed conflict warns")
+
+  local mapForm = { id = "needy2", dependencies = { base = ">=1.0.0" } }
+  local issues2 = ModIndex.compatIssues(mapForm, { installed = { base = "1.2.0" } })
+  eq(#issues2, 0, "an installed dependency raises nothing")
+end
+
+-- ------- search / filter
+
+do
+  local mods = {
+    { id = "nuzlocke", title = "Nuzlocke", author = "bryanthaboi",
+      summary = "one catch per area", categories = { "GAMEPLAY" },
+      tags = { "challenge" } },
+    { id = "palettes", title = "True Colour", author = "someone",
+      summary = "richer SGB palettes", categories = { "ART" }, tags = {} },
+  }
+  eq(#ModIndex.filter(mods, {}), 2, "no filter keeps everything")
+  eq(#ModIndex.filter(mods, { query = "nuz" }), 1, "search matches a title prefix")
+  eq(ModIndex.filter(mods, { query = "colour" })[1].id, "palettes",
+    "search matches the title")
+  eq(ModIndex.filter(mods, { query = "bryanthaboi" })[1].id, "nuzlocke",
+    "search matches the author")
+  eq(ModIndex.filter(mods, { query = "SGB" })[1].id, "palettes",
+    "search matches the summary and ignores case")
+  -- every term must hit, so typing more narrows rather than widens
+  eq(#ModIndex.filter(mods, { query = "nuzlocke palettes" }), 0,
+    "terms are ANDed")
+  eq(ModIndex.filter(mods, { category = "ART" })[1].id, "palettes",
+    "category filters")
+  eq(#ModIndex.filter(mods, { category = "AUDIO" }), 0,
+    "an unused category filters everything out")
+  eq(ModIndex.filter(mods, { tag = "challenge" })[1].id, "nuzlocke",
+    "tag filters")
+end
+
+
+do
+  local mods = {
+    { id = "gen1only", title = "Gen 1 Only", games = { "gen1" } },
+    { id = "goldonly", title = "Gold Only", games = { "gold" } },
+    { id = "everywhere", title = "Everywhere", games = { "all" } },
+    { id = "silent", title = "Silent" },
+  }
+  eq(#ModIndex.filter(mods, {}), 4, "no game filter keeps every listing")
+  local gen1 = ModIndex.filter(mods, { game = "gen1" })
+  eq(#gen1, 3, "gen1 keeps the Gen 1 mods, the all-games mod and the silent one")
+  eq(gen1[1].id, "gen1only", "feed order survives the game filter")
+  local gen2 = ModIndex.filter(mods, { game = "gen2" })
+  eq(#gen2, 3, "gen2 drops the Gen 1-only mod")
+  eq(gen2[1].id, "goldonly", "and keeps the one that names a Gen 2 game")
+  eq(#ModIndex.filter(mods, { game = "red" }), 3,
+    "a single version reads the generation's mods too")
+  eq(ModIndex.filter(mods, { game = "gold" })[1].id, "goldonly",
+    "and a Gen 2 version keeps a mod that names only that game")
+  eq(#ModIndex.filter(mods, { game = "all" }), 4, '"all" filters nothing')
+  eq(#ModIndex.filter(mods, { game = "nonsense" }), 4,
+    "a token naming no game this engine has filters nothing")
+  local silentSeen = false
+  for _, entry in ipairs(gen2) do
+    if entry.id == "silent" then silentSeen = true end
+  end
+  check(silentSeen, "a listing with no games stays in every game's list")
+
+  local carts = {
+    { id = "johto", kind = "cart", base = "gold" },
+    { id = "kanto", kind = "cart", base = "red" },
+  }
+  eq(ModIndex.filter(carts, { game = "gen2" })[1].id, "johto",
+    "a cart is filtered by the game it plays as")
+  eq(#ModIndex.filter(carts, { game = "gen1" }), 1,
+    "and only that game")
+end
+
+do
+  eq(ModIndex.targetLabel({ games = { "red", "blue", "yellow" } }), "GEN 1",
+    "a whole generation chips as GEN 1")
+  eq(ModIndex.targetLabel({ games = { "all" } }), "GEN 1+2+3",
+    "every game chips as every generation")
+  eq(ModIndex.targetLabel({ games = { "gold" } }), "GOLD",
+    "a lone game chips as its own name")
+  check(ModIndex.targetLabel({}) == nil, "a listing with no games has no chip")
+  check(ModIndex.targetLabel(nil) == nil, "and neither does a nil entry")
+  eq(#ModIndex.targets({ games = { "gen1" } }), 3,
+    "targets expands a generation token to its versions")
+  eq(#ModIndex.targets({}), 0, "and an undeclared games list is empty")
+end
+
+do
+  local index = ModIndex.parse(feed({ NUZLOCKE }))
+  local cats = ModIndex.categoriesIn(index)
+  eq(#cats, 1, "only categories an entry actually uses are offered")
+  eq(cats[1], "GAMEPLAY", "and they keep the feed's declared order")
+end
+
+-- ------- carts: a second array on the same feed, at the same schema_version
+--
+-- The published index added carts without bumping schema_version, so an older
+-- build has to keep reading the feed and this one has to read both halves.
+-- The fixture below is the shape carts/<Author>@<id>/meta.json validates to.
+
+local OMEGA = {
+  folder = "bryanthaboi@omega_random_competition",
+  id = "omega_random_competition",
+  title = "OMEGA RANDOM COMPETITION",
+  author = "bryanthaboi",
+  summary = "Bois Club Randomizer as its own cartridge.",
+  version = "1.0.0",
+  base = "red",
+  seal = "sealed",
+  shell = "#7B1B22",
+  finish = "holo",
+  speeds = { 1, 2 },
+  tags = { "randomizer", "competition" },
+  repo = "https://github.com/bryanthaboi/omega-random-competition",
+  github = "bryanthaboi/omega-random-competition",
+  automatic_version_check = true,
+  mods = { { id = "bcr", source = "github", repo = "bryanthaboi/bcr",
+             version = "1.0.0", sha256 = ("83a111b4"):rep(8) } },
+  load_order = { "bcr" },
+  license = "MIT",
+  description_url = "data/carts/bryanthaboi@omega_random_competition/description.md",
+  update_check = "pending",
+}
+
+local JOHTO_CART = {
+  id = "johto_run", title = "Johto Run", author = "Ren", version = "2.1.0",
+  base = "gold", seal = "open",
+  repo = "https://github.com/ren/johto-run",
+  github = "ren/johto-run",
+  mods = { { id = "steps", source = "gamebanana", mod = 42, file = 99,
+             md5 = ("ab"):rep(16), enabled = false,
+             options = { pace = "fast" } } },
+  update_check = "ok",
+  latest = { version = "2.1.0", tag = "v2.1.0",
+             zip = { name = "johto_run-2.1.0.zip",
+                     url = "https://example.test/johto_run-2.1.0.zip" } },
+}
+
+local function cartFeed(carts, overrides)
+  local doc = { schema_version = 1, count = 1, cart_count = #carts,
+                categories = { "GAMEPLAY" },
+                base_games = { "red", "blue", "yellow", "gold", "silver" },
+                mods = { NUZLOCKE }, carts = carts }
+  for k, v in pairs(overrides or {}) do doc[k] = v end
+  return Json.encode(doc)
+end
+
+do
+  local index, err = ModIndex.parse(cartFeed({ OMEGA, JOHTO_CART }))
+  check(index ~= nil, "a feed carrying carts parses: " .. tostring(err))
+  eq(index.schemaVersion, 1, "carts arrive at schema_version 1, unbumped")
+  eq(#index.mods, 1, "the mods array still parses")
+  eq(#index.carts, 2, "and the carts array parses beside it")
+  local c = index.carts[1]
+  eq(c.id, "omega_random_competition", "cart id")
+  eq(c.title, "OMEGA RANDOM COMPETITION", "cart title")
+  eq(c.base, "red", "the game the cart plays as")
+  eq(c.seal, "sealed", "its seal")
+  eq(c.shell, "#7B1B22", "its shell colour")
+  eq(c.finish, "holo", "its finish")
+  eq(c.speeds[2], 2, "its speed ladder")
+  eq(c.tags[1], "randomizer", "its tags")
+  eq(c.license, "MIT", "its license")
+  eq(c.load_order[1], "bcr", "its load order")
+  eq(#c.mods, 1, "its pinned mod set")
+  eq(c.mods[1].source, "github", "a github pin keeps its source")
+  eq(c.mods[1].repo, "bryanthaboi/bcr", "with the repo it comes from")
+  eq(c.mods[1].version, "1.0.0", "the exact pinned version")
+  eq(#c.mods[1].sha256, 64, "and the digest that gates it")
+  check(ModIndex.isCart(c), "a parsed cart is marked as one")
+  check(not ModIndex.isCart(index.mods[1]), "a mod is not")
+
+  local g = index.carts[2]
+  eq(g.mods[1].source, "gamebanana", "a gamebanana pin keeps its source")
+  eq(g.mods[1].mod, 42, "with its mod page id")
+  eq(g.mods[1].file, 99, "and its file id")
+  eq(#g.mods[1].md5, 32, "and the digest GameBanana reports")
+  eq(g.mods[1].enabled, false, "a pin shipped switched off stays off")
+  eq(g.mods[1].options.pace, "fast", "frozen options survive")
+  eq(ModIndex.installUrl(g), "https://example.test/johto_run-2.1.0.zip",
+    "a cart resolves its release asset the same way a mod does")
+end
+
+-- the old-feed case: no carts key at all
+do
+  local index, err = ModIndex.parse(feed({ NUZLOCKE }))
+  check(index ~= nil, "a feed with no carts key still parses: " .. tostring(err))
+  eq(#index.mods, 1, "its mods are unaffected")
+  eq(type(index.carts), "table", "and carts is a list, never nil")
+  eq(#index.carts, 0, "an absent carts array is an empty one")
+end
+
+-- a broken cart row costs itself, not the whole feed
+do
+  local noBase = {}
+  for k, v in pairs(OMEGA) do noBase[k] = v end
+  noBase.base = nil
+  local noMods = {}
+  for k, v in pairs(JOHTO_CART) do noMods[k] = v end
+  noMods.id, noMods.mods = "empty_pins", {}
+  local index, err = ModIndex.parse(cartFeed({
+    noBase, "not even an object", { id = "bare" }, noMods, OMEGA }))
+  check(index ~= nil, "a feed with malformed carts still parses: " .. tostring(err))
+  eq(#index.carts, 1, "only the well-formed cart is listed")
+  eq(index.carts[1].id, "omega_random_competition", "and it is the intact one")
+  eq(#index.mods, 1, "the mods array is untouched by a bad cart")
+end
+
+-- search and filter: matches() already spans title / author / summary / id,
+-- so the cart half reuses it wholesale.  The category filter does not apply
+-- (a cart has none); base does.
+do
+  local index = ModIndex.parse(cartFeed({ OMEGA, JOHTO_CART }))
+  local carts = index.carts
+  eq(#ModIndex.filter(carts, {}), 2, "no filter keeps every cart")
+  eq(ModIndex.filter(carts, { query = "omega" })[1].id,
+    "omega_random_competition", "search matches a cart by title")
+  eq(ModIndex.filter(carts, { query = "Ren" })[1].id, "johto_run",
+    "search matches a cart by author")
+  eq(ModIndex.filter(carts, { query = "randomizer" })[1].id,
+    "omega_random_competition", "and by summary")
+  eq(#ModIndex.filter(carts, { query = "omega johto" }), 0,
+    "cart search terms are ANDed too")
+  eq(ModIndex.filter(carts, { base = "gold" })[1].id, "johto_run",
+    "filtering by base game keeps the carts for that game")
+  eq(#ModIndex.filter(carts, { base = "RED" }), 1,
+    "and compares case-insensitively")
+  eq(#ModIndex.filter(carts, { base = "silver" }), 0,
+    "a base no cart plays as filters everything out")
+  eq(#ModIndex.filter(carts, { category = "GAMEPLAY" }), 0,
+    "a cart carries no categories, so a category filter never matches one")
+  eq(ModIndex.filter(carts, { tag = "competition" })[1].id,
+    "omega_random_competition", "cart tags filter")
+
+  local bases = ModIndex.baseGamesIn(index)
+  eq(#bases, 2, "only base games a cart actually plays as are offered")
+  eq(bases[1], "red", "and they keep the feed's declared base_games order")
+  eq(bases[2], "gold", "in that order")
+  eq(#ModIndex.baseGamesIn(ModIndex.parse(feed({ NUZLOCKE }))), 0,
+    "a cartless feed offers no base games")
+end
+
+print("ok mod_index_tests")

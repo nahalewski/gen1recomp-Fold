@@ -1,0 +1,470 @@
+#!/usr/bin/env bash
+# Unified test entry point (21-testing-and-ci §CI).
+#
+# Runs every tier that this checkout can run and exits non-zero if any of
+# them fails.  The tier split is what makes that possible: T1/T2/T4 need
+# nothing but the committed fixture dataset, so they run anywhere --
+# including CI, which has no ROM.  T3 asserts Pokemon Red facts and needs
+# data/generated/ or an imported Red cache, so it is skipped automatically
+# when neither exists rather than failing the run.
+#
+#   scripts/test.sh                 every tier this checkout can run
+#   scripts/test.sh --quick         skip the slow content tier
+#   scripts/test.sh --bless         re-pin the fingerprint goldens
+#   WITH_SHOTS=1 scripts/test.sh    also capture and diff golden shots
+#                                   (fails today -- see the T5 block below)
+#
+# LUA overrides the interpreter (luajit here; CI installs lua5.4 too, but
+# the engine targets LuaJIT/5.1 semantics so luajit is the default).
+#
+# POKEPORT_TEST_CACHES points at one LOVE identity holding an imported cache
+# per version (red/ blue/ yellow/ gold/ silver/ crystal/); each is exported as
+# RED_CACHE .. CRYSTAL_CACHE for the suites that read one.  Build it with:
+#   POKEPORT_IDENTITY=pokeport-test-caches POKEPORT_VERSION=<version> \
+#   POKEPORT_IMPORT_ONLY=1 POKEPORT_IMPORT_ROM="<rom>" love .
+# An explicit RED_CACHE/GOLD_CACHE/... in the environment always wins.
+
+set -uo pipefail
+
+cd "$(dirname "$0")/.."
+
+LUA=${LUA:-luajit}
+LUA54=${LUA54:-lua5.4}
+BLESS=0
+QUICK=0
+SHOTS=${WITH_SHOTS:-0}
+
+for arg in "$@"; do
+  case "$arg" in
+    --bless) BLESS=1 ;;
+    --bless-shots) SHOTS=1; BLESS=1 ;;
+    --quick) QUICK=1 ;;
+    --help|-h) sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "unknown option: $arg" >&2; exit 2 ;;
+  esac
+done
+
+if ! command -v "$LUA" >/dev/null 2>&1; then
+  echo "no lua interpreter '$LUA' on PATH (set LUA=...)" >&2
+  exit 2
+fi
+
+# The save-directory sandbox (conf.lua reads POKEPORT_IDENTITY) is scoped
+# to the shot tier, which is the only one that starts a real LOVE process
+# and could write into a developer's save folder.
+SANDBOX_IDENTITY="ci-$$"
+
+# Per-version caches.  POKEPORT_TEST_CACHES names one LOVE identity holding an
+# imported cache per version (red/ blue/ yellow/ gold/ silver/ crystal/).
+CACHE_IDENTITY=${POKEPORT_TEST_CACHE_IDENTITY:-pokeport-test-caches}
+if [ -n "${POKEPORT_TEST_CACHES:-}" ]; then
+  CACHE_ROOT="$POKEPORT_TEST_CACHES"
+elif [ -d "$HOME/Library/Application Support/LOVE/$CACHE_IDENTITY" ]; then
+  CACHE_ROOT="$HOME/Library/Application Support/LOVE/$CACHE_IDENTITY"
+else
+  CACHE_ROOT="$HOME/.local/share/love/$CACHE_IDENTITY"
+fi
+
+# Only a cache with the importer's completion marker is offered: a half-written
+# one would fail suites that are meant to self-skip.
+adopt_cache() {
+  local var="$1" dir="$CACHE_ROOT/$2"
+  [ -z "${!var:-}" ] || return 0
+  [ -f "$dir/rom-cache.complete" ] || return 0
+  export "$var=$dir"
+  echo "   $var=$dir"
+}
+
+echo ""
+echo "-- per-version caches under $CACHE_ROOT"
+adopt_cache RED_CACHE red
+adopt_cache BLUE_CACHE blue
+adopt_cache YELLOW_CACHE yellow
+adopt_cache GOLD_CACHE gold
+adopt_cache SILVER_CACHE silver
+adopt_cache CRYSTAL_CACHE crystal
+
+GAME3_IDENTITY=""
+GAME3_GBA_CACHE=""
+GAME3_WANT=$("$LUA" -e 'package.path = "./?.lua;" .. package.path
+  local V = require("src.import.gba.versions")
+  io.write(V.CACHE_VERSION, " ", V.NATIVE_VERSION)' 2>/dev/null)
+
+game3_current() {
+  local meta="$1/data/generated/gba/meta.json" cv nv
+  [ -f "$1/rom-cache.complete" ] && [ -f "$meta" ] || return 1
+  cv=$(sed -n 's/.*"cache_version"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$meta" | head -1)
+  nv=$(sed -n 's/.*"native_version"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$meta" | head -1)
+  [ -n "$GAME3_WANT" ] && [ "$cv $nv" = "$GAME3_WANT" ]
+}
+
+game3_adopt() {
+  local dir="$1" owner saveRoot
+  game3_current "$dir" || return 1
+  owner=$(dirname "$dir")
+  [ "$(basename "$owner")" = "pokemon-love2d" ] && return 1
+  for saveRoot in "$HOME/Library/Application Support/LOVE" "$HOME/.local/share/love"; do
+    if [ "$(dirname "$owner")" = "$saveRoot" ]; then
+      GAME3_IDENTITY=$(basename "$owner")
+      return 0
+    fi
+  done
+  GAME3_GBA_CACHE="$dir/data/generated/gba"
+}
+
+if [ -n "${POKEPORT_IDENTITY:-}" ]; then
+  echo "   game3 identity: POKEPORT_IDENTITY=$POKEPORT_IDENTITY (from the environment)"
+elif [ -n "${POKEPORT_GBA_CACHE:-}" ]; then
+  echo "   game3 cache: POKEPORT_GBA_CACHE=$POKEPORT_GBA_CACHE (from the environment)"
+else
+  if ! game3_adopt "$CACHE_ROOT/firered"; then
+    while IFS= read -r meta; do
+      game3_adopt "${meta%/data/generated/gba/meta.json}" && break
+    done < <(ls -1t "$HOME/Library/Application Support/LOVE"/*/firered/data/generated/gba/meta.json \
+      "$HOME/.local/share/love"/*/firered/data/generated/gba/meta.json 2>/dev/null)
+  fi
+  if [ -n "$GAME3_IDENTITY" ]; then
+    echo "   game3 identity: POKEPORT_IDENTITY=$GAME3_IDENTITY (FireRed cache v${GAME3_WANT% *})"
+  elif [ -n "$GAME3_GBA_CACHE" ]; then
+    echo "   game3 cache: POKEPORT_GBA_CACHE=$GAME3_GBA_CACHE"
+  fi
+fi
+
+FAILED=()
+run_tier() {
+  local label="$1"; shift
+  echo ""
+  echo "=============================================================="
+  echo "  $label"
+  echo "=============================================================="
+  if "$@"; then
+    echo "-- $label: PASS"
+  else
+    echo "-- $label: FAIL"
+    FAILED+=("$label")
+  fi
+}
+
+# ------- ROM-free tiers: these are what CI runs
+
+if command -v luacheck >/dev/null 2>&1; then
+  run_tier "T0 luacheck gate (undefined globals, unreachable code)" \
+    ./scripts/lint.sh --gate
+else
+  echo ""
+  echo "-- T0 luacheck gate: skipped (no luacheck on PATH --"
+  echo "   luarocks install luacheck; CI installs and gates on it regardless)"
+fi
+
+run_tier "T0 ROM builder version routing" python3 tests/build_rom_data_cli_test.py
+run_tier "T0 ROM manifest generator pin/overrides" python3 tests/rom_manifest_generator_test.py
+run_tier "T0 Yellow title OBP eye remap" python3 tests/title_pikachu_obp_test.py
+run_tier "T0 Crystal manifest + specials coverage" "$LUA" tests/crystal_import_test.lua
+run_tier "T0 switch CI workflow content gate" "$LUA" tests/switch_ci_workflows_test.lua
+run_tier "T0 switch transfer docs gate" "$LUA" tests/switch_transfer_docs_test.lua
+run_tier "T0 ShaderFX bridge packaging gate" "$LUA" tests/shaderfx_bridge_packaging_test.lua
+# NX Blue/Yellow asset overlay: ROM-free, must run on every checkout so a
+# Sound.lua / overlay regression is not gated only on switch-changes paths.
+run_tier "T0 NX asset overlay fallback" "$LUA" tests/engine/assets_version_fallback_test.lua
+run_tier "T0 NX generated-path static guard" "$LUA" tests/engine/nx_generated_guard_test.lua
+run_tier "T0 NX Yellow/Blue boot (dynamic paths)" "$LUA" tests/engine/nx_yellow_boot_test.lua
+run_tier "T0 NX Gold cache load (maps.lua prefix)" "$LUA" tests/engine/cache_fs_gold_nx_load_test.lua
+run_tier "T0 touch-controls pad cursor" "$LUA" tests/engine/touch_controls_pad_cursor_test.lua
+run_tier "T0 URI launch arguments" "$LUA" tests/engine/launch_uri_args_test.lua
+run_tier "T1/T2 engine invariants + parity gates" "$LUA" tests/run_engine.lua
+# Gen 2 / Crystal: ROM-free (own fixtures, or a self-skip on a missing cache),
+# so it runs here rather than behind the Red content gate below.
+run_tier "T2 Gen 2 / Crystal suites" "$LUA" tests/run_gen2.lua
+run_tier "T4 mod-SDK" "$LUA" tests/run_modkit.lua
+run_tier "T4 modkit dev tooling (fixture)" "$LUA" tests/modkit_tests.lua
+
+game3_kill_jobs() {
+  local p
+  for p in ${GAME3_PIDS:-}; do
+    pkill -TERM -P "$p" 2>/dev/null
+    kill -TERM "$p" 2>/dev/null
+  done
+}
+
+game3_cleanup() {
+  game3_kill_jobs
+  [ -n "${GAME3_TMP:-}" ] && rm -rf "$GAME3_TMP"
+}
+
+run_game3_tier() {
+  local jobs=${GAME3_JOBS:-8}
+  case "$jobs" in ''|*[!0-9]*) jobs=8 ;; esac
+  [ "$jobs" -ge 1 ] || jobs=8
+  local limit=${GAME3_TIMEOUT:-300}
+  case "$limit" in ''|*[!0-9]*) limit=300 ;; esac
+
+  local suites=(tests/game3_*.lua)
+  if [ ! -f "${suites[0]:-}" ]; then
+    echo "-- T6 game3: no tests/game3_*.lua suites found"
+    return 1
+  fi
+  local total=${#suites[@]}
+  if [ -z "${POKEPORT_IDENTITY:-}${POKEPORT_GBA_CACHE:-}$GAME3_IDENTITY$GAME3_GBA_CACHE" ]; then
+    echo "-- T6 game3: no current FireRed cache adopted; ROM-dependent suites self-skip"
+  fi
+  echo "-- T6 game3: running $total top-level suites, $jobs at a time, ${limit}s limit each"
+
+  GAME3_TMP=$(mktemp -d "${TMPDIR:-/tmp}/game3gate.XXXXXX") || return 1
+  GAME3_PIDS=""
+  local tmp=$GAME3_TMP
+  trap game3_cleanup EXIT
+  trap 'game3_cleanup; exit 130' INT
+  trap 'game3_cleanup; exit 143' TERM
+
+  local suite base i=0
+  for suite in "${suites[@]}"; do
+    base=${suite##*/}
+    base=${base%.lua}
+    (
+      [ -n "$GAME3_IDENTITY" ] && export POKEPORT_IDENTITY="$GAME3_IDENTITY"
+      [ -n "$GAME3_GBA_CACHE" ] && export POKEPORT_GBA_CACHE="$GAME3_GBA_CACHE"
+      perl -e 'alarm shift; exec @ARGV or exit 127' "$limit" "$LUA" "$suite" \
+        >"$tmp/$base.log" 2>&1
+      echo $? >"$tmp/$base.rc"
+    ) 2>/dev/null &
+    GAME3_PIDS="$GAME3_PIDS $!"
+    i=$((i + 1))
+    if [ $((i % jobs)) -eq 0 ]; then
+      wait
+      GAME3_PIDS=""
+    fi
+  done
+  wait
+  GAME3_PIDS=""
+
+  local passed=0 skipped=0 failed=0
+  local fail_list=""
+  for suite in "${suites[@]}"; do
+    base=${suite##*/}
+    base=${base%.lua}
+    local rc
+    if [ -f "$tmp/$base.rc" ]; then
+      rc=$(cat "$tmp/$base.rc" 2>/dev/null || echo "?")
+    else
+      rc="NO-EXIT-CODE"
+    fi
+    if [ "$rc" = "0" ]; then
+      passed=$((passed + 1))
+      grep -q '^\[skip\]' "$tmp/$base.log" 2>/dev/null && skipped=$((skipped + 1))
+      continue
+    fi
+    failed=$((failed + 1))
+    fail_list="$fail_list $suite"
+    echo "   FAIL $suite (exit $rc)"
+    if [ "$rc" = "142" ]; then
+      echo "       | TIMEOUT: killed after ${limit}s (GAME3_TIMEOUT)"
+      tail -6 "$tmp/$base.log" | sed 's/^/       | /'
+    elif [ ! -s "$tmp/$base.log" ]; then
+      echo "       | EMPTY OUTPUT: the worker never printed anything" \
+        "(exit $rc; 137/143 = killed, NO-EXIT-CODE = worker never ran) --" \
+        "environment/parallelism problem, NOT a suite assertion"
+    else
+      local cause
+      cause=$(grep -m1 '^\[FAIL\]' "$tmp/$base.log" || true)
+      if [ -n "$cause" ]; then
+        echo "       | assert: $cause"
+      else
+        cause=$(grep -m1 -E 'stack traceback|\.lua:[0-9]+:|Too many open files|not enough memory' \
+          "$tmp/$base.log" || true)
+        echo "       | crash: ${cause:-non-zero exit with no recognized cause (see log tail)}"
+      fi
+      tail -6 "$tmp/$base.log" | sed 's/^/       | /'
+    fi
+  done
+
+  echo "-- T6 game3: $total run, $passed passed ($skipped self-skipped), $failed failed"
+
+  trap - EXIT INT TERM
+  GAME3_TMP=""
+  if [ "$failed" -gt 0 ]; then
+    echo "   failures:$fail_list"
+    echo "   per-suite logs kept for triage: $tmp"
+    return 1
+  fi
+  rm -rf "$tmp"
+  return 0
+}
+run_tier "T6 game3 top-level scenario suites" run_game3_tier
+
+run_tier "T4 title checkpoint cold restart" \
+  bash tests/integration/title_checkpoint_cold_start.sh
+
+# The modded-link desync suite (symmetric mod, handshake fail-closed,
+# extra-bag round trip) is ROM-free and runs inside the T4 tier above, as
+# tests/modkit/cases/link_desync.lua.
+#
+# tests/run_link_tests.lua is a different matter: it calls Data:load() at
+# :27 and so needs data/generated/.  It is grouped with the content tier
+# until that bootstrap can take an injected dataset.
+# ------- content tier: only meaningful with an imported ROM
+
+
+# tests/run_tests.lua is expected to be clean.  It used to carry two stale
+# chip-audio assertions on the allowlist below (Pikachu cry WAV exists /
+# low-health alarm sfx extracted); both have since been fixed, so the
+# baseline is zero and any failure fails the tier.  Keep the allowlist
+# mechanism rather than ignoring the exit code -- that would hide every
+# future content regression.
+KNOWN_CONTENT_FAILURES=0
+KNOWN_CONTENT_LINES=""
+
+run_content_behavior() {
+  local out rc
+  out=$("$LUA" tests/run_tests.lua 2>&1)
+  rc=$?
+  local count
+  count=$(printf '%s\n' "$out" | grep -c '^FAIL ' || true)
+  local lines
+  lines=$(printf '%s\n' "$out" | grep '^FAIL ' | sort)
+
+  if [ "$count" -eq "$KNOWN_CONTENT_FAILURES" ] \
+     && [ "$lines" = "$(printf '%s\n' "$KNOWN_CONTENT_LINES" | sort)" ]; then
+    if [ "$rc" -ne 0 ] && [ "$count" -eq 0 ]; then
+      printf '%s\n' "$out" | tail -3
+      local crash=""
+      crash=$(printf '%s\n' "$out" | grep -o 'luajit:.\{0,255\}' | head -1 || true)
+      if [ -z "$crash" ]; then
+        crash=$(printf '%s\n' "$out" \
+          | grep -m1 -E '^lua5\.[0-9]:|\.lua:[0-9]+:' | cut -c1-300 || true)
+      fi
+      echo "  crash: ${crash:-exited rc=$rc with no error line captured}"
+      echo "run_tests.lua exited rc=$rc before printing any FAIL line; a crash is not a pass"
+      return 1
+    fi
+    printf '%s\n' "$out" | tail -3
+    if [ "$count" -gt 0 ]; then
+      echo "(the $count known failure(s), unchanged; run_tests rc=$rc)"
+    fi
+    return 0
+  fi
+
+  local faillines=""
+  faillines=$(printf '%s\n' "$out" | grep '^FAIL ' || true)
+  head -10 <<<"$faillines" | cut -c1-160 || true
+  printf '%s\n' "$out" | tail -2
+  echo "expected exactly $KNOWN_CONTENT_FAILURES known failures; got $count"
+  [ "$rc" -ne 0 ] && echo "run_tests.lua exited rc=$rc"
+  echo "(full failure list: POKEPORT_DATA_DIR=... \$LUA tests/run_tests.lua)"
+  return 1
+}
+
+# The Red dataset is the source tree's when tools/build_data.py wrote one, and
+# otherwise the imported Red cache, through Data:load's POKEPORT_DATA_DIR hook.
+HAVE_RED_DATA=0
+if [ -f data/generated/maps.lua ]; then
+  HAVE_RED_DATA=1
+elif [ -n "${RED_CACHE:-}" ] && [ -f "$RED_CACHE/data/generated/maps.lua" ]; then
+  HAVE_RED_DATA=1
+  export POKEPORT_DATA_DIR="$RED_CACHE/data/generated"
+  echo ""
+  echo "-- T3 content: reading Red from $POKEPORT_DATA_DIR"
+fi
+
+if [ "$HAVE_RED_DATA" = "1" ]; then
+  if [ "$QUICK" = "1" ]; then
+    echo ""
+    echo "-- T3 content: skipped (--quick)"
+  else
+    run_tier "T3 content behavior (Red)" run_content_behavior
+    # The save editor ships inside every build (the launcher's Edit button on
+    # a save row opens it), so its panel suites run in CI rather than by hand.
+    run_tier "T3 save editor" "$LUA" tests/run_save_editor_tests.lua
+    run_tier "T3 save editor: boxes + items" "$LUA" tests/save_editor_task6_tests.lua
+    run_tier "T3 save editor: events + dex" "$LUA" tests/save_editor_task7_tests.lua
+    run_tier "T3 save editor: map browser" "$LUA" tests/save_editor_task8_tests.lua
+    run_tier "T3 save editor: mod awareness" "$LUA" tests/save_editor_mod_tests.lua
+    run_tier "T3 save editor: gold / gen2" "$LUA" tests/save_editor_gen2_tests.lua
+    run_tier "T3 save editor: wheel scrolling" "$LUA" tests/save_editor_wheel_bug595_test.lua
+    run_tier "T3 save editor: pad / NX input" "$LUA" tests/save_editor_pad_input_test.lua
+    run_tier "T3 save editor: bag / PC move" "$LUA" tests/save_editor_item_move_bug1951_test.lua
+    run_tier "T5 link (loopback lockstep)" "$LUA" tests/run_link_tests.lua
+    # The oversize-save vendor oracle (tests/save_oversize_vendor_test.lua)
+    # cross-checks the launcher's footer-truncation import against the
+    # INDEPENDENT PKHeX-derived gen1lib codec, which cannot run under luajit
+    # (native 5.3+ operators).  Needs a stock Lua 5.3/5.4; skip when absent.
+    if command -v "$LUA54" >/dev/null 2>&1; then
+      run_tier "T3 save oversize vendor oracle" "$LUA54" tests/save_oversize_vendor_test.lua
+    else
+      echo ""
+      echo "-- T3 save oversize vendor oracle: skipped (no '$LUA54' on PATH; set LUA54=...)"
+    fi
+  fi
+else
+  echo ""
+  echo "-- T3 content + run_link_tests: skipped (no data/generated/ and no"
+  echo "   RED_CACHE -- import a ROM to run them; the modded-link cases ran"
+  echo "   in T4 and the Gen 2 suites in T2)"
+fi
+
+# ------- golden screenshots: needs love + a display
+
+if [ "$SHOTS" = "1" ]; then
+  SHOT_DIR=${SHOT_DIR:-/tmp/pokeport-shots}
+  export SHOT_DIR
+  mkdir -p "$SHOT_DIR"
+  SHOT_DRIVER=tests/drivers/shots_fixture.lua
+
+  # The fixture goldens are not capturable yet.  A driver only ever runs
+  # after main.lua's bootGame(), so it cannot redirect Data:load(), and
+  # src/core/Data.lua has no POKEPORT_DATA_DIR branch -- 21-testing-and-ci
+  # §"Engine changes" specifies one, but it is not implemented, so a LOVE
+  # process has no way to boot tests/fixture_data.  On a ROM-less checkout
+  # main.lua does not even reach the game: RomImporter.isReady() is false
+  # and it opens the importer instead.
+  #
+  # WITH_SHOTS is opt-in, so asking for a tier that cannot run is an error,
+  # not a skip.  Reporting "pass" here is what made the whole pipeline look
+  # delivered while never diffing a single pixel.
+  if [ ! -f "$SHOT_DRIVER" ]; then
+    echo ""
+    echo "-- T5 shots: NOT WIRED ($SHOT_DRIVER does not exist)."
+    echo "   Fixture capture needs the POKEPORT_DATA_DIR override in"
+    echo "   src/core/Data.lua so LOVE can boot tests/fixture_data."
+    FAILED+=("T5 shots (requested but not wired)")
+  elif ! command -v love >/dev/null 2>&1; then
+    echo ""
+    echo "-- T5 shots: love is not on PATH but WITH_SHOTS was requested"
+    FAILED+=("T5 shots (love missing)")
+  else
+    RUNNER="love ."
+    command -v xvfb-run >/dev/null 2>&1 && RUNNER="xvfb-run -a love ."
+    run_tier "T5 shot capture" \
+      env POKEPORT_IDENTITY="$SANDBOX_IDENTITY" POKEPORT_DRIVER="$SHOT_DRIVER" $RUNNER
+    if [ "$BLESS" = "1" ]; then
+      run_tier "T5 shot bless" \
+        python3 tools/compare_shots.py tests/goldens/shots "$SHOT_DIR" --bless
+    else
+      run_tier "T5 shot diff" \
+        python3 tools/compare_shots.py tests/goldens/shots "$SHOT_DIR"
+    fi
+  fi
+fi
+
+# ------- fingerprint blessing
+
+if [ "$BLESS" = "1" ] && [ "$SHOTS" != "1" ]; then
+  echo ""
+  echo "re-pinning fingerprint goldens (deliberate parity change -- record it"
+  echo "in docs/known-differences.md or docs/new-features.md)"
+  "$LUA" tests/bless_fingerprints.lua || FAILED+=("fingerprint bless")
+fi
+
+# ------- verdict
+
+echo ""
+echo "=============================================================="
+if [ ${#FAILED[@]} -eq 0 ]; then
+  echo "  ALL TIERS PASSED"
+  echo "=============================================================="
+  exit 0
+fi
+
+echo "  ${#FAILED[@]} TIER(S) FAILED"
+for tier in "${FAILED[@]}"; do echo "    - $tier"; done
+echo "=============================================================="
+exit 1

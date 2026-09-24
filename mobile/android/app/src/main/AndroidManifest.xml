@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" >
+<uses-permission android:name="android.permission.VIBRATE" />
+  <uses-permission android:name="android.permission.BLUETOOTH" />
+  <!-- Link play (src/link/): both the LAN backend (enet UDP) and the relay
+       backend (luasocket TCP) are ordinary sockets, and Android denies those
+       to a UID without INTERNET. Bind and connect then come back EPERM, which
+       the link screen shows as "(Operation not permitted)" (issue #287).
+       scripts/build_android.sh must not strip this again. -->
+  <uses-permission android:name="android.permission.INTERNET" />
+  <!-- Required only to hand a checksum-verified, user-selected GitHub release
+       APK to Android's own Package Installer. Android still shows the install
+       confirmation and enforces package/signing-key/version compatibility. -->
+  <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+  <!-- Step bridge: love.system.syncHealthSteps reads the hardware step
+       counter, which Android 10+ gates behind this runtime permission.
+       Requested only on the first sync call (the Pokéwalker mod's SYNC
+       STEPS option); scripts/build_android.sh must not strip it. -->
+  <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+<!-- OpenGL ES 2.0 -->
+  <uses-feature android:glEsVersion="0x00020000" />
+  <!-- Touchscreen support -->
+  <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+  <!-- Game controller support -->
+  <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
+  <uses-feature android:name="android.hardware.gamepad" android:required="false" />
+  <uses-feature android:name="android.hardware.usb.host" android:required="false" />
+  <!-- External mouse input events -->
+  <uses-feature android:name="android.hardware.type.pc" android:required="false" />
+  <!-- Low latency audio -->
+  <uses-feature android:name="android.hardware.audio.low_latency" android:required="false" />
+  <uses-feature android:name="android.hardware.audio.pro" android:required="false" />
+  <!-- love.sensor (accelerometer). No runtime permission needed on Android;
+       this is a Play Store filtering hint only, so required=false like the
+       other optional hardware features above. -->
+  <uses-feature android:name="android.hardware.sensor.accelerometer" android:required="false" />
+
+  <application
+      android:allowBackup="true"
+      android:icon="@mipmap/ic_launcher"
+      android:roundIcon="@mipmap/ic_launcher_round"
+      android:label="${NAME}" >
+    <meta-data
+        android:name="android.allow_multiple_resumed_activities"
+        android:value="true" />
+    <!-- The full-update APK is copied into this small cache subdirectory
+         before it is handed to Package Installer. Keep the provider private
+         and expose only that directory, never a storage root. -->
+    <provider
+        android:name="androidx.core.content.FileProvider"
+        android:authorities="${applicationId}.full_update_provider"
+        android:exported="false"
+        android:grantUriPermissions="true">
+      <meta-data
+          android:name="android.support.FILE_PROVIDER_PATHS"
+          android:resource="@xml/full_update_paths" />
+    </provider>
+    <activity
+        android:name="org.love2d.android.GameActivity"
+        android:exported="true"
+        android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|fontScale|locale|layoutDirection|colorMode"
+        android:label="${NAME}"
+        android:launchMode="singleTask"
+        android:screenOrientation="${ORIENTATION}"
+        android:resizeableActivity="false"
+        android:theme="@android:style/Theme.NoTitleBar.Fullscreen" >
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+        <category android:name="tv.ouya.intent.category.GAME" />
+      </intent-filter>
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <data android:scheme="gen1recomp++" android:host="launch" />
+      </intent-filter>
+      <intent-filter>
+        <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+      </intent-filter>
+    </activity>
+    <activity
+        android:name="org.love2d.android.GameActivity$SecondaryActivity"
+        android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density|fontScale|locale|layoutDirection|colorMode"
+        android:excludeFromRecents="true"
+        android:exported="false"
+        android:launchMode="singleTask"
+        android:resizeableActivity="false"
+        android:screenOrientation="${ORIENTATION}"
+        android:taskAffinity="${applicationId}.secondary"
+        android:theme="@android:style/Theme.NoTitleBar.Fullscreen" />
+  </application>
+</manifest>

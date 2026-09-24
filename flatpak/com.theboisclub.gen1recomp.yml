@@ -1,0 +1,68 @@
+# Template consumed by scripts/build_flatpak.sh (placeholders substituted).
+# Do not pass this file directly to flatpak-builder.
+app-id: com.theboisclub.gen1recomp
+runtime: org.freedesktop.Platform
+runtime-version: "24.08"
+sdk: org.freedesktop.Sdk
+command: gen1recomp
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=x11
+  - --socket=wayland
+  - --device=dri
+  - --socket=pulseaudio
+  # Full input device access so SDL2 sees udev/evdev gamepads + rumble/gyro
+  - --device=all
+  - --filesystem=home
+modules:
+  - name: curl
+    buildsystem: simple
+    build-commands:
+      - tar -xJf curl-static.tar.xz
+      - install -Dm755 curl /app/bin/curl
+    sources:
+      - type: file
+        url: https://github.com/stunnel/static-curl/releases/download/8.21.0/curl-linux-x86_64-musl-8.21.0.tar.xz
+        sha256: e955f211202ded2536164588331acfc987dc4b7857efa3577717b1ffeab22029
+        dest-filename: curl-static.tar.xz
+
+  - name: love
+    buildsystem: simple
+    build-commands:
+      - chmod +x love-x86_64.AppImage
+      - ./love-x86_64.AppImage --appimage-extract
+      - mkdir -p /app/lib/love /app/bin /app/share/gen1recomp
+      - cp -a squashfs-root/bin/love /app/bin/love
+      - cp -a squashfs-root/lib/. /app/lib/love/
+      - |
+        cat > /app/bin/gen1recomp <<'EOF'
+        #!/bin/sh
+        export LD_LIBRARY_PATH="/app/lib/love:${LD_LIBRARY_PATH:-}"
+        exec /app/bin/love /app/share/gen1recomp/game.love "$@"
+        EOF
+      - chmod +x /app/bin/gen1recomp
+      - install -Dm644 game.love /app/share/gen1recomp/game.love
+      # BRIDGE-BEGIN
+      - install -Dm755 liblibrashader_bridge.so /app/share/gen1recomp/liblibrashader_bridge.so
+      # BRIDGE-END
+      - install -Dm644 com.theboisclub.gen1recomp.desktop /app/share/applications/com.theboisclub.gen1recomp.desktop
+      - install -Dm644 com.theboisclub.gen1recomp.metainfo.xml /app/share/metainfo/com.theboisclub.gen1recomp.metainfo.xml
+      - install -Dm644 icon.png /app/share/icons/hicolor/512x512/apps/com.theboisclub.gen1recomp.png
+    sources:
+      - type: file
+        url: https://github.com/love2d/love/releases/download/11.5/love-11.5-x86_64.AppImage
+        sha256: 65a673406431eff7167a15a032bf7a2e4ba50108e091eb7b176465831f9b5e00
+        dest-filename: love-x86_64.AppImage
+      - type: file
+        path: game.love
+      # BRIDGE-BEGIN
+      - type: file
+        path: liblibrashader_bridge.so
+      # BRIDGE-END
+      - type: file
+        path: com.theboisclub.gen1recomp.metainfo.xml
+      - type: file
+        path: com.theboisclub.gen1recomp.desktop
+      - type: file
+        path: icon.png

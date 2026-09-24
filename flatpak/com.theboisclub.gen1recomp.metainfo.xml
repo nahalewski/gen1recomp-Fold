@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.theboisclub.gen1recomp</id>
+  <name>gen1recomp</name>
+  <summary>Pokémon Gen 1/2 recompilation</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <developer_name>The Bois Club</developer_name>
+  <description>
+    <p>
+      A LÖVE-based recompilation of Pokémon Gen 1 and Gen 2 with a launcher,
+      ROM importer, mods, and optional cloud save sync. Requires your own
+      legal cartridge dumps.
+    </p>
+  </description>
+  <launchable type="desktop-id">com.theboisclub.gen1recomp.desktop</launchable>
+  <url type="homepage">https://gen1re.com/</url>
+  <url type="vcs-browser">https://github.com/bryanthaboi/gen1recomp</url>
+  <screenshots>
+    <screenshot type="default">
+      <caption>Launcher</caption>
+      <image>https://raw.githubusercontent.com/bryanthaboi/gen1recomp/main/assets/logo/gen1recomp_cover.png</image>
+    </screenshot>
+  </screenshots>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.0.0" date="1970-01-01"/>
+  </releases>
+</component>
