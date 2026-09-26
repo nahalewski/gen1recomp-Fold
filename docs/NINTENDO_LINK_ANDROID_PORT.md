@@ -259,9 +259,63 @@ Wi-Fi is handed back to Android.
    the same `GameBoyLinkEndpoint` (needs a Wireless Adapter (RFU) model in the
    core; FireRed / LeafGreen / Emerald look for it).
 
+## Pixel 9 Pro Fold (comet): what the BCM4390 driver offers
+
+Hardware: Tensor G4 with the **Broadcom BCM4390** (Wi-Fi 7, 2.4/5/6 GHz),
+driven by Google's `bcmdhd4390` full-MAC driver.  The driver source
+(`kernel/google-modules/wlan/bcmdhd/bcm4390`, GPL-2.0; branches include
+`android-gs-comet-6.1-android16`) was fetched for this study to the
+`bcmdhd4390-src` branch of the AeonDX repo (never `main`), with `REPORT.txt`.
+Read from the `android-gs-tegu-6.1-android16-beta` snapshot of the same
+repository; re-check against the comet branch before relying on a detail.
+
+What the Linux reference (kinnay/LDN, `ldn/wlan.py`) does, and what the
+Pixel driver has for each:
+
+| kinnay/LDN (Linux) | ESP32 equivalent | bcmdhd4390 | Verdict |
+| --- | --- | --- | --- |
+| monitor interface + `SET_CHANNEL`, radiotap RX of action frames | promiscuous RX | `WL_MONITOR` + `WL_CFG80211_MONITOR` compiled in for Pixel builds (PCIe, not STB); enabled by the Broadcom private ioctl `WLC_SET_MONITOR` (108), which adds a `radiotap` netdev (`dhd_add_monitor_if`); `set_monitor_channel` op | **Available with root** (`CAP_NET_ADMIN` private ioctl) |
+| `REGISTER_FRAME` (action) | action RX | `mgmt_frame_register` op | Available (root for nl80211) |
+| `REMAIN_ON_CHANNEL` for scanning | channel hop | `remain_on_channel` / `cancel_remain_on_channel` | Available |
+| `CONNECT` with SSID, BSSID, freq, CCMP/PSK suites and the RSN IE in `ATTR_IE` | association with a forced RSN IE | `connect` op; the RSN/WPA IE from `sme->ie` is pushed to firmware with the `wpaie` iovar (unless `auto_wpa`) | Available; the firmware must accept LDN's exact IE (test) |
+| no 4-way handshake | EAPOL dropped | **the in-dongle supplicant (`sup_wpa`, `BCMSUP_4WAY_HANDSHAKE`, `dhd_use_idsup=1`) is on by default** | **Main risk.** Set the `sup_wpa` iovar to 0 on the interface (private ioctl, root) before connecting, so the firmware leaves keys to the host |
+| `NEW_KEY` pairwise + group CCMP | raw key install | `add_key` / `set_default_key` ops (`WLC_SET_KEY`) | Available |
+| `SET_STATION` authorized | `auth_done` | `change_station` op | Available (test that it opens the port) |
+| `CONTROL_PORT_FRAME` for EtherType 0x88B7 | `ldn_control` RX hook | **not advertised** (no `CONTROL_PORT_OVER_NL80211`) | Use an `AF_PACKET` socket on 0x88B7 instead, as the ESP32 does |
+| raw frame **injection** from the monitor interface | (not used for joining) | monitor TX strips the 802.11 header and sends as data (`dhd_mon_if_subif_start_xmit`); no raw injection | Not available: **hosting** a room in software is out; **joining** one (all FireRed/LeafGreen needs) is not affected |
+
+The "wondertap" path mosey-extended reports for Pixel 9/10 (a `wonder0`
+monitor interface created with `NL80211_CMD_NEW_INTERFACE`, Google vendor
+commands `0x001A11` subcmds 1-5 for frequency, filter, fixed TX rate, and
+`TPACKET_V3` frame I/O) is not in this driver snapshot's source (no
+"wonder" strings); it may live in the comet branch or a separate
+`wonder.ko`.  It is a second, possibly better, route for item 1 and for
+injection, to be checked on the phone.
+
+**Conclusion so far:** everything the join path needs exists in stock
+`bcmdhd4390` as nl80211 operations plus two Broadcom private ioctls
+(`WLC_SET_MONITOR`, iovar `sup_wpa`), all reachable from a root helper.
+No kernel module looks necessary for joining.  The unknowns are firmware
+behaviour, answered by these tests on the phone, in order:
+
+1. `iw list` (a static arm64 `iw`, e.g. Termux's) shows `frame`,
+   `remain_on_channel`, `connect`, `new_key`, `set_station`, and `monitor`
+   among interface modes; `dmesg | grep "4-way handshake mode"`.
+2. Monitor on (private ioctl), tuned to 1/6/11 near a Switch hosting
+   FireRed's Union Room: Nintendo action frames (OUI `00:22:aa`) appear on
+   the `radiotap` interface.
+3. `sup_wpa 0`, then `CONNECT` with LDN's RSN IE to the room's BSSID:
+   association succeeds, no EAPOL wait, no deauth after the handshake timeout.
+4. `NEW_KEY` x2 + authorise: the LDN authentication exchange (0x88B7 over
+   `AF_PACKET`) gets answered, which proves the keys decrypt.
+5. 169.254.x.x + neighbours + UDP 12345: Pia traffic flows.
+
+Each is a separate command in the root helper, so a failure names the step.
+
 ## Known blockers (honest list)
 
-1. **Pixel Wi-Fi driver**: Pixels have used Broadcom full-MAC Wi-Fi (the
+1. **Pixel Wi-Fi driver** (see the BCM4390 section above for what the
+   source shows): Pixels have used Broadcom full-MAC Wi-Fi (the
    `bcmdhd` driver) with the 802.11 stack in the chip's firmware; the exact chip
    in the 9 Pro Fold should be read off the phone (`/vendor/firmware`,
    `dmesg`).  Stock firmware offers no monitor mode, Nexmon's patches cover
