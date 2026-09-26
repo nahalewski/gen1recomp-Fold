@@ -552,13 +552,24 @@ function M.drawCarousel(L, w)
   end
 end
 
+--- The system row's buttons shown: M.hide(id) (set by the fold layer) keeps
+--- an eShop app's button off until the app is downloaded.
+local function shownSystem()
+  local out = {}
+  for _, b in ipairs(model.system) do
+    if not (M.hide and M.hide(b.id)) then out[#out + 1] = b end
+  end
+  return out
+end
+
 function M.drawSystemRow(L)
   local sr = model.systemRow
-  local n = #model.system
+  local list = shownSystem()
+  local n = #list
   if n == 0 then return end
   local span = n * sr.size + (n - 1) * sr.spacing
   local x = (model.baseW - span) / 2
-  for _, b in ipairs(model.system) do
+  for _, b in ipairs(list) do
     local img = image(b.src)
     if img then
       setColor({ 1, 1, 1, 1 })
@@ -576,13 +587,14 @@ end
 function M.systemButtonAt(x, y, L)
   if not (model and model.systemRow and L) then return nil end
   local sr = model.systemRow
-  local n = #model.system
+  local list = shownSystem()
+  local n = #list
   local span = n * sr.size + (n - 1) * sr.spacing
   local bx = (model.baseW - span) / 2
-  for i, b in ipairs(model.system) do
+  for _, b in ipairs(list) do
     local rx, ry, rs = L.x(bx), L.y(sr.y), L.n(sr.size)
     if x >= rx and x <= rx + rs and y >= ry and y <= ry + rs then
-      return M.systemButtons()[i]
+      for _, sb in ipairs(M.systemButtons()) do if sb.id == b.id then return sb end end
     end
     bx = bx + sr.size + sr.spacing
   end

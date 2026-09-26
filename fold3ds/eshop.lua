@@ -18,6 +18,7 @@ local E = {}
 
 local lg = love.graphics
 local Sfx = require("fold3ds.sfx")
+local Apps = require("fold3ds.apps")
 
 local ctx
 local st = {
@@ -110,11 +111,17 @@ local function shelfRows(i)
   else
     table.sort(rows, function(a, b) return (a.title or a.id) < (b.title or b.id) end)
   end
+  -- AeonDX's own apps first (fold3ds/apps.lua)
+  for k = #Apps.LIST, 1, -1 do
+    local e = Apps.LIST[k]
+    if st.shelf ~= "installed" or Apps.installed(e.app) then table.insert(rows, 1, e) end
+  end
   st.cache = { src = all, shelf = st.shelf, inst = installed, rows = rows }
   return rows
 end
 
 local function isNew(e)
+  if e.app then return not Apps.installed(e.app) end
   local ModIndex = require("src.mods.ModIndex")
   local d = ModIndex.releaseDates(e)
   local first = d and (d.first or d.latest)
@@ -126,6 +133,14 @@ local function isNew(e)
 end
 
 local function thumb(i, e)
+  if e and e.app then
+    local key = "app:" .. e.app
+    if st.images[key] == nil then
+      local ok, t = pcall(lg.newImage, e.icon)
+      st.images[key] = ok and t or false
+    end
+    return st.images[key] or nil
+  end
   if not i or not e then return nil end
   if i._startFindThumb then pcall(i._startFindThumb, i, e) end
   local ok, t = pcall(i._findThumb, i, e)
@@ -135,6 +150,7 @@ end
 
 -- what the title's button says: Download, Update or Open
 local function status(i, e)
+  if e.app then return Apps.installed(e.app) and "open" or "download" end
   local installed = installedMap(i)[e.id]
   if not installed then return "download" end
   local ModIndex = require("src.mods.ModIndex")
@@ -147,6 +163,15 @@ end
 
 local function download(e)
   local i = imp()
+  if e.app then
+    -- an app: onto the HOME menu (the job's finish plays the gift)
+    Apps.install(e.app)
+    if i then i.findNotice = nil end
+    st.job = { entry = e, started = st.t }
+    st.cache = nil
+    Sfx.play("button")
+    return
+  end
   if not i or not i._findInstall then return end
   if i._modInstall or i._cartInstall then Sfx.play("noMove") return end
   i.findNotice = nil
@@ -340,8 +365,8 @@ local function drawTitle(r, y0, pad)
   lg.setFont(f2)
   col({ 120, 122, 128 })
   local ModIndex = require("src.mods.ModIndex")
-  local v = ModIndex.displayVersion and ModIndex.displayVersion(e) or e.version or ""
-  local stats = ModIndex.downloadStats(e)
+  local v = (not e.app and ModIndex.displayVersion and ModIndex.displayVersion(e)) or e.version or ""
+  local stats = not e.app and ModIndex.downloadStats(e) or nil
   local line = (e.author or "") .. (v ~= "" and ("   v" .. tostring(v):gsub("^v", "")) or "")
     .. (stats and stats.total and ("   " .. stats.total .. " downloads") or "")
   lg.printf(line, r.x + pad, y0 + f:getHeight() * 1.1, r.w - pad * 2, "center")
@@ -395,7 +420,7 @@ local function drawTitle(r, y0, pad)
       fit(img("thanks"), r.x + r.w * 0.1, by, r.w * 0.8, h0 * 0.2)
       lg.setFont(f2)
       col(INK, 0.8)
-      lg.printf("Turn it on in MODS.", r.x, by + h0 * 0.2, r.w, "center")
+      lg.printf(e.app and "It's on your HOME Menu now." or "Turn it on in MODS.", r.x, by + h0 * 0.2, r.w, "center")
     else
       lg.setFont(f2)
       col({ 210, 60, 50 })
@@ -557,14 +582,14 @@ local function activate(id)
     local s = status(imp(), e)
     if s == "open" then
       Sfx.play("open")
-      return "mods"
+      return e.app and ("app:" .. e.app) or "mods"
     end
     showTitle(e)
     download(e)
   elseif id == "get" then
     local e = st.title
     if not e then return end
-    if status(imp(), e) == "open" then Sfx.play("open") return "mods" end
+    if status(imp(), e) == "open" then Sfx.play("open") return e.app and ("app:" .. e.app) or "mods" end
     download(e)
   elseif id == "prev" or id == "next" then
     local n = math.max(1, math.ceil(#rows / PER_PAGE))
@@ -676,9 +701,9 @@ function E.update(dt)
   st.wasLoading = now
   -- a download finishing
   local job = st.job
-  if job and not job.done and i and not i._modInstall and st.t - job.started > 0.3 then
+  if job and not job.done and (job.entry.app or (i and not i._modInstall)) and st.t - job.started > 0.3 then
     job.done = true
-    local n = i.findNotice
+    local n = i and i.findNotice
     job.ok = not (n and n.ok == false)
     job.text = n and n.text
     job.doneAt = st.t

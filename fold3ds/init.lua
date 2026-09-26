@@ -367,7 +367,13 @@ end
 -- the eShop's answers: "exit" closes it, "mods" goes on to the Mods applet
 local function eshopDone(r)
   if r == "exit" then Eshop.close()
-  elseif r == "mods" then Eshop.close(); Home.openApplet(state.subject, "mods") end
+  elseif r == "mods" then Eshop.close(); Home.openApplet(state.subject, "mods")
+  elseif type(r) == "string" and r:match("^app:") then
+    -- one of AeonDX's own apps, downloaded from the eShop: open it
+    local app = APPS[r:sub(5)]
+    Eshop.close()
+    if app then app.open() end
+  end
 end
 
 -- Download Play owns both screens while it is open (launcher only)
@@ -668,6 +674,7 @@ local function press(btn, src)
     if Input and Input.overlayPressed and GAME_BTN[btn] then Input:overlayPressed(GAME_BTN[btn]) end
   else
     if skinActive() and PokeBank.isOpen() then appExit(PokeBank, PokeBank.button(btn)) return end
+    if skinActive() and Eshop.isOpen() then eshopDone(Eshop.button(btn)) return end
     if skinActive() then
       local action = SKIN_ACTION[btn]
       if action == "confirm" then
@@ -2629,7 +2636,13 @@ local function drawFrame()
     skinGames()
     Skin.draw(W, H, "all")
     -- emuPoke Bank, opened from the system row, over the whole screen
-    if PokeBank.isOpen() then PokeBank.drawSingle({ x = 0, y = 0, w = W, h = H }) end
+    if PokeBank.isOpen() then PokeBank.drawSingle({ x = 0, y = 0, w = W, h = H })
+    elseif Eshop.isOpen() then
+      -- the eShop: its top screen on the left, its bottom screen on the right
+      local lw = math.floor(W * 0.5)
+      Eshop.drawTop({ x = 0, y = 0, w = lw, h = H })
+      Eshop.drawBottom({ x = lw, y = 0, w = W - lw, h = H })
+    end
     lg.pop()
     return
   end
@@ -3294,6 +3307,11 @@ function M.install()
   Camera.init({ font = font })
   Credits.init({ font = font })
   PokeBank.init({ font = font, sfx = function(name) Sfx.play(name) end })
+  -- the Switch skin's buttons for eShop apps stay off until downloaded
+  Skin.hide = function(id)
+    local okA, Apps = pcall(require, "fold3ds.apps")
+    return id == "pokebank" and not (okA and Apps.installed("pokebank"))
+  end
   Teardown.init({
     font = font,
     sfx = function(name) Sfx.play(name, true) end,
@@ -3413,10 +3431,17 @@ function M.install()
       elseif phase == "released" then appExit(PokeBank, PokeBank.released(id, x, y)) end
       return true
     end
+    if Eshop.isOpen() then
+      if phase == "pressed" then Eshop.pressed(id, x, y)
+      elseif phase == "moved" then Eshop.moved(id, x, y)
+      else eshopDone(Eshop.released(id, x, y)) end
+      return true
+    end
     if phase == "pressed" then
       local L = Skin.layout and Skin.layout(state.W or real.getWidth(), state.H or real.getHeight())
       local b = Skin.systemButtonAt and L and Skin.systemButtonAt(x, y, L)
       if b and b.action == "pokebank" then PokeBank.open() return true end
+      if b and b.action == "eshop" then Eshop.open() return true end
     end
     return false
   end

@@ -64,6 +64,7 @@ local APPLETS = {
   { id = "activity", name = "Activity Log", activity = true },
   { id = "friends", name = "Friend List", app = true },
   { id = "gamenotes", name = "Game Notes", app = true },
+  { id = "pokebank", name = "emuPoke Bank", app = true, eshop_app = "pokebank" },
   { id = "settings", name = "Settings", icon = "settings", color = { 70, 140, 220 }, modal = "settings" },
   { id = "mods", name = "Mods", icon = "puzzle", color = { 236, 176, 30 }, tab = "mods" },
   { id = "find", name = "Find Mods", icon = "search", color = { 246, 130, 40 }, tab = "find" },
@@ -241,7 +242,18 @@ end
 
 function H.showing() return st.open == nil end
 -- the applet the d-pad has picked on the bar, if any (its banner shows on top)
-function H.barFocus() return st.bar and APPLETS[st.bar] and APPLETS[st.bar].id or nil end
+-- the applets shown: an eShop app (eshop_app) only once it is downloaded
+local ALL_APPLETS = APPLETS
+local function shownApplets()
+  local okA, Apps = pcall(require, "fold3ds.apps")
+  local out = {}
+  for _, a in ipairs(ALL_APPLETS) do
+    if not a.eshop_app or (okA and Apps.installed(a.eshop_app)) then out[#out + 1] = a end
+  end
+  return out
+end
+
+function H.barFocus() return st.bar and shownApplets()[st.bar] and shownApplets()[st.bar].id or nil end
 function H.opened() return st.open end
 function H.folderOpen() return st.folder ~= nil end
 ---------------------------------------------------------------- play meter
@@ -791,8 +803,8 @@ function H.draw(r, imp, time)
   local pad = math.floor(r.w * 0.015)
   local sizeW = barH * 1.9
   local ax = r.x + pad
-  local aw = (r.w - 2 * pad - sizeW - pad) / #APPLETS
-  for i, a in ipairs(APPLETS) do
+  local aw = (r.w - 2 * pad - sizeW - pad) / #shownApplets()
+  for i, a in ipairs(shownApplets()) do
     local x = ax + (i - 1) * aw
     local s = math.min(aw, barH) * 0.72
     local hot = st.appletDown == a.id
@@ -817,8 +829,8 @@ function H.draw(r, imp, time)
   end
   local sx, sy, sh = r.x + r.w - pad - sizeW, r.y + pad * 0.6, barH - pad * 1.2
   sizeButtons(sx, sy, sizeW, sh)
-  st.barRects[#APPLETS + 1] = { sx + sizeW * 0.25 - sh * 0.4, sy + sh * 0.1, sh * 0.8, sh * 0.8 }
-  st.barRects[#APPLETS + 2] = { sx + sizeW * 0.75 - sh * 0.4, sy + sh * 0.1, sh * 0.8, sh * 0.8 }
+  st.barRects[#shownApplets() + 1] = { sx + sizeW * 0.25 - sh * 0.4, sy + sh * 0.1, sh * 0.8, sh * 0.8 }
+  st.barRects[#shownApplets() + 2] = { sx + sizeW * 0.75 - sh * 0.4, sy + sh * 0.1, sh * 0.8, sh * 0.8 }
   -- the d-pad's place on the bar
   local br = st.bar and st.barRects[st.bar]
   if br then
@@ -1216,7 +1228,7 @@ function H.button(imp, name)
   -- on the applet bar: left / right along it, A opens, down (or B) back
   -- to the icons
   if st.bar then
-    local count = #APPLETS + 2
+    local count = #shownApplets() + 2
     if name == "left" or name == "right" then
       local b = clamp(st.bar + (name == "right" and 1 or -1), 1, count)
       Sfx.play(b ~= st.bar and "over" or "edge")
@@ -1225,11 +1237,11 @@ function H.button(imp, name)
       st.lastBar, st.bar = st.bar, nil
       Sfx.play("over")
     elseif name == "a" then
-      if st.bar <= #APPLETS then
+      if st.bar <= #shownApplets() then
         Sfx.play("touch")
-        openTile(imp, APPLETS[st.bar])
+        openTile(imp, shownApplets()[st.bar])
       elseif g then
-        setLevel(st.level + (st.bar == #APPLETS + 1 and -1 or 1), g, n)
+        setLevel(st.level + (st.bar == #shownApplets() + 1 and -1 or 1), g, n)
       end
     elseif name == "up" then
       Sfx.play("edge")

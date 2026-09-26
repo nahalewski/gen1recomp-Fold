@@ -178,6 +178,7 @@
     </Button>
     <Button id="eshop" name="Nintendo eShop" src="textures/icon_store.png" color="#FF7D00" action="app:eshop" />
     <Button id="album" name="Album" src="textures/icon_album.png" color="#0072CE" action="app:album" />
+    <Button id="pokebank" name="emuPoke Bank" src="textures/icon_pokebank.png" color="#2A4BD8" action="app:pokebank" />
     <Button id="controllers" name="Controllers" src="textures/icon_controllers.png" color="#6E3FB5" action="modal:controllers" />
     <Button id="settings" name="Settings" src="textures/icon_settings.png" color="#646870" action="modal:settings" />
     <Button id="sleep" name="Sleep Mode" src="textures/icon_sleep.png" color="#2D3035" action="app:sleep" />
