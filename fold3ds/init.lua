@@ -89,17 +89,17 @@ local LID_BOX = { 30, 157, 1390, 757 }
 -- sockets in half-size units of the bottom shell (x, y centre, r radius);
 -- sprite = rect in the half-size button sheet.  Both scale by 2 for the art.
 local BUTTONS = {
-  { name = "stick", x = 47, y = 92, r = 36, sprite = { 270, 228, 181, 182 }, kind = "dpad" },
-  { name = "pad", x = 47, y = 168, r = 34, sprite = { 37, 228, 184, 186 }, kind = "dpad" },
-  { name = "x", x = 438, y = 78, r = 15, sprite = { 381, 57, 133, 134 } },
+  { name = "stick", x = 50, y = 97.5, r = 36, sprite = { 270, 228, 181, 182 }, kind = "dpad" },
+  { name = "pad", x = 48, y = 177, r = 34, sprite = { 37, 228, 184, 186 }, kind = "dpad" },
+  { name = "x", x = 439, y = 91.3, r = 15, sprite = { 381, 57, 133, 134 } },
   -- the C-stick in its socket above X: cycles the top screen's shape
-  { name = "cstick", x = 412, y = 56, r = 10, sprite = { 515, 256, 62, 62 } },
-  { name = "y", x = 414, y = 104, r = 15, sprite = { 560, 58, 133, 133 } },
-  { name = "a", x = 462.5, y = 104, r = 15, sprite = { 35, 58, 132, 133 } },
-  { name = "b", x = 437.5, y = 130, r = 15, sprite = { 209, 58, 132, 133 } },
-  { name = "start", x = 411.5, y = 183.5, r = 11, sprite = { 515, 256, 62, 62 } },
-  { name = "select", x = 411, y = 215.5, r = 11, sprite = { 515, 340, 62, 63 } },
-  { name = "home", x = 245.5, y = 248, r = 18, sprite = { 288, 427, 144, 86 }, wide = true },
+  { name = "cstick", x = 412, y = 67, r = 10, sprite = { 515, 256, 62, 62 } },
+  { name = "y", x = 412, y = 117.5, r = 15, sprite = { 560, 58, 133, 133 } },
+  { name = "a", x = 465, y = 117.5, r = 15, sprite = { 35, 58, 132, 133 } },
+  { name = "b", x = 439, y = 143.7, r = 15, sprite = { 209, 58, 132, 133 } },
+  { name = "start", x = 413, y = 192, r = 11, sprite = { 515, 256, 62, 62 } },
+  { name = "select", x = 413, y = 223.6, r = 11, sprite = { 515, 340, 62, 63 } },
+  { name = "home", x = 243, y = 258.5, r = 18, sprite = { 288, 427, 144, 86 }, wide = true },
 }
 -- game buttons (Input names) and launcher buttons (SDL gamepad names)
 local GAME_BTN = { a = "a", b = "b", x = "r", y = "l", start = "start", select = "select",

@@ -56,3 +56,6 @@ jobs:
           assert n > 0, "games table is empty"
           print(f"romdb ok: {n} games")
           EOF
+
+      - name: emuPoke Bank save readers
+        run: python3 fold3ds/tests/test_pokebank_readers.py
