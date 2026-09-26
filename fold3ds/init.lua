@@ -2002,11 +2002,11 @@ local function drawLidIn(x, y, W, H, portrait, cover)
 end
 
 -- a wallpaper filling a w x h box, cropped rather than stretched
--- The startup, as a 3DS starts: the boot screen (the G1R Deluxe logo on
+-- The startup, as a 3DS starts: the boot screen (the AeonDX logo animated on
 -- both screens, fold3ds/boot/, the lid's click, then the HOME menu's welcome
 -- jingle), then the Health & Safety warning until a touch or a button, then
 -- the HOME menu coming up out of white.  A tap hurries the logo along.
-local BOOT_TIME, BOOT_FADE = 3.6, 0.5
+local BOOT_TIME, BOOT_FADE = 4.2, 0.5
 local HS_FADE, HOME_TIME = 0.35, 0.7
 local function booting()
   local b = state.boot
@@ -2036,10 +2036,10 @@ skipBoot = function()
   return false
 end
 
-local function bootImage(name)
+local function bootImage(name, ext)
   local key = "boot:" .. name
   if state.images[key] == nil then
-    local ok, img = pcall(lg.newImage, DIR .. "boot/" .. name .. ".jpg")
+    local ok, img = pcall(lg.newImage, DIR .. "boot/" .. name .. (ext or ".jpg"))
     state.images[key] = ok and img or false
     if ok then img:setFilter("linear", "linear") end
   end
@@ -2073,6 +2073,137 @@ local function drawBootScreen(img, r, age, zoom, a)
     lg.rectangle("fill", r.x, r.y, r.w, r.h)
   end
   lg.setScissor()
+end
+
+-- The AeonDX boot, animated from its art (fold3ds/boot/aeondx_*.png, cut by
+-- tools/make_boot_sprites.py).  Top: the blue and purple streaks fly in from
+-- the sides, the ring opens behind, the logo drops into it with a flash and
+-- then floats in the ring's pulse.  Bottom: the logo comes up, "Loading..."
+-- counts its dots and the bar fills until the boot hands over.
+local function aeon(name) return bootImage("aeondx_" .. name, ".png") end
+local function clamp01(x) return x < 0 and 0 or (x > 1 and 1 or x) end
+local function easeOut(x) x = clamp01(x) return 1 - (1 - x) ^ 3 end
+local function easeBack(x)
+  x = clamp01(x)
+  local c = 1.7
+  return 1 + (c + 1) * (x - 1) ^ 3 + c * (x - 1) ^ 2
+end
+
+-- a deep night with a few stars twinkling (fixed places, so no flicker)
+local function drawBootSky(r, age, a)
+  lg.setColor(0.02, 0.02, 0.06, a)
+  lg.rectangle("fill", r.x, r.y, r.w, r.h)
+  local n = 38
+  for i = 1, n do
+    local u = (i * 0.6180339) % 1
+    local v = (i * 0.4142135 + 0.13) % 1
+    local tw = 0.35 + 0.65 * math.abs(math.sin(age * (1.3 + (i % 5) * 0.37) + i))
+    local blue = i % 3 == 0
+    lg.setColor(blue and 0.55 or 0.85, blue and 0.8 or 0.6, 1, 0.55 * tw * a * clamp01(age / 0.6))
+    lg.circle("fill", r.x + u * r.w, r.y + v * r.h, math.max(0.6, r.h * 0.004 * (1 + (i % 3))))
+  end
+end
+
+-- draw img centred at x, y, w wide (the height follows), turned by rot
+local function drawCentred(img, x, y, w, rot, alpha, add)
+  if not img then return end
+  local iw, ih = img:getDimensions()
+  local k = w / iw
+  if add then lg.setBlendMode("add") end
+  lg.setColor(1, 1, 1, alpha)
+  lg.draw(img, x, y, rot or 0, k, k, iw / 2, ih / 2)
+  if add then lg.setBlendMode("alpha") end
+end
+
+local function drawAeonTop(r, age, a)
+  local logo, ring = aeon("logo"), aeon("ring")
+  if not logo then return false end
+  lg.setScissor(r.x, r.y, r.w, r.h)
+  drawBootSky(r, age, a)
+  local cx, cy = r.x + r.w / 2, r.y + r.h * 0.5
+  -- the streaks: in from each side, then drifting on, fading to a glow
+  local sIn = easeOut((age - 0.05) / 0.75)
+  local drift = math.max(0, age - 0.8) * r.w * 0.015
+  local sA = a * clamp01((age - 0.05) / 0.25) * (1 - 0.45 * clamp01((age - 1.2) / 0.8))
+  drawCentred(aeon("streak_blue"), r.x + r.w * (-0.45 + 0.7 * sIn) + drift, r.y + r.h * 0.34, r.w * 0.5, 0, sA, true)
+  drawCentred(aeon("streak_purple"), r.x + r.w * (1.45 - 0.7 * sIn) - drift, r.y + r.h * 0.68, r.w * 0.5, 0, sA, true)
+  -- the ring opens behind where the logo lands, turning slowly, pulsing
+  local rIn = easeBack((age - 0.45) / 0.7)
+  if ring and rIn > 0 then
+    local pulse = 1 + 0.03 * math.sin(age * 3.1)
+    drawCentred(ring, cx, cy, r.h * 1.02 * rIn * pulse, age * 0.35, a * clamp01((age - 0.45) / 0.3), true)
+  end
+  -- the logo drops in, lands with a flash, then floats
+  local lt = (age - 0.85) / 0.5
+  if lt > 0 then
+    local k = 1.7 - 0.7 * easeBack(lt)
+    local float = age > 1.35 and math.sin((age - 1.35) * 2.2) * r.h * 0.012 or 0
+    drawCentred(logo, cx, cy + float, r.w * 0.64 * k, 0, a * clamp01(lt * 2.5))
+    local flash = 1 - clamp01((age - 1.3) / 0.35)
+    if age > 1.3 and flash > 0 then
+      drawCentred(logo, cx, cy + float, r.w * 0.64, 0, a * flash * 0.8, true)
+      lg.setColor(0.7, 0.85, 1, a * flash * 0.35)
+      lg.rectangle("fill", r.x, r.y, r.w, r.h)
+    end
+  end
+  lg.setScissor()
+  return true
+end
+
+local function drawAeonBottom(r, age, a)
+  local logo, text = aeon("load_logo"), aeon("load_text")
+  local empty, full = aeon("bar_empty"), aeon("bar_full")
+  if not (logo and empty and full) then return false end
+  lg.setScissor(r.x, r.y, r.w, r.h)
+  drawBootSky(r, age + 7, a)
+  local cx = r.x + r.w / 2
+  -- the logo comes up and settles
+  local li = easeBack((age - 0.2) / 0.6)
+  if li > 0 then
+    drawCentred(logo, cx, r.y + r.h * (0.36 + 0.04 * (1 - li)), r.w * 0.8 * (0.9 + 0.1 * li), 0,
+      a * clamp01((age - 0.2) / 0.35))
+  end
+  -- "Loading" and its dots, one more every third of a second
+  local ta = a * clamp01((age - 0.7) / 0.3)
+  if text and ta > 0 then
+    local tw = r.w * 0.46
+    local th = tw * text:getHeight() / text:getWidth()
+    local tx, ty = cx - tw / 2, r.y + r.h * 0.64 - th / 2
+    local dots = math.floor(age * 3) % 4
+    local sx, sy, sw, sh = lg.getScissor()
+    lg.intersectScissor(tx, ty, tw * (0.815 + 0.062 * dots), th + 1)
+    lg.setColor(1, 1, 1, ta * (0.8 + 0.2 * math.sin(age * 4)))
+    lg.draw(text, tx, ty, 0, tw / text:getWidth(), th / text:getHeight())
+    lg.setScissor(sx, sy, sw, sh)
+  end
+  -- the bar: empty, filling with the boot, a bright head on the fill
+  local ba = a * clamp01((age - 0.8) / 0.3)
+  if ba > 0 then
+    local bw = r.w * 0.72
+    local k = bw / empty:getWidth()
+    local bh = empty:getHeight() * k
+    local bx, by = cx - bw / 2, r.y + r.h * 0.79 - bh / 2
+    lg.setColor(1, 1, 1, ba)
+    lg.draw(empty, bx, by, 0, k, k)
+    local p = easeOut((age - 1.0) / (BOOT_TIME - BOOT_FADE - 1.1))
+    if p > 0 then
+      -- the fill's left cap starts past the frame's glow (5% in)
+      local fw = bw * (0.05 + 0.9 * p)
+      local sx, sy, sw, sh = lg.getScissor()
+      lg.intersectScissor(bx, by, fw, bh)
+      lg.draw(full, bx, by, 0, k, k)
+      lg.setScissor(sx, sy, sw, sh)
+      lg.setBlendMode("add")
+      local hx = bx + fw
+      for i = 3, 1, -1 do
+        lg.setColor(0.9, 0.6, 1, ba * 0.18 * (4 - i))
+        lg.circle("fill", hx - bh * 0.1, by + bh / 2, bh * 0.14 * i)
+      end
+      lg.setBlendMode("alpha")
+    end
+  end
+  lg.setScissor()
+  return true
 end
 
 local function healthImage(name)
@@ -2175,12 +2306,12 @@ local function drawBoot(L, which)
     if which == "all" or which == "top" then
       lg.setColor(0, 0, 0, 1)
       lg.rectangle("fill", L.topCut.x, L.topCut.y, L.topCut.w, L.topCut.h)
-      drawBootScreen(bootImage("top"), L.topCut, age, zoom, a)
+      if not drawAeonTop(L.topCut, age, a) then drawBootScreen(bootImage("top"), L.topCut, age, zoom, a) end
     end
     if which == "all" or which == "bot" then
       lg.setColor(0, 0, 0, 1)
       lg.rectangle("fill", L.botCut.x, L.botCut.y, L.botCut.w, L.botCut.h)
-      drawBootScreen(bootImage("bottom"), L.botCut, age, zoom, a)
+      if not drawAeonBottom(L.botCut, age, a) then drawBootScreen(bootImage("bottom"), L.botCut, age, zoom, a) end
     end
   end
   lg.pop()
