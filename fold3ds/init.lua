@@ -57,6 +57,7 @@ local EmuPlay = require("fold3ds.emuplay")
 local EmuPage = require("fold3ds.emupage")
 local Credits = require("fold3ds.credits")
 local Teardown = require("fold3ds.teardown")
+local PokeBank = require("fold3ds.pokebank")
 local Emus = require("fold3ds.emus")
 local SkinManager = require("fold3ds.skinmanager")
 -- superseded by fold3ds.skin, not drawn; optional (it may not be in the
@@ -349,7 +350,7 @@ local function actOn()
 end
 
 -- the Friend List and Game Notes, each owning both screens while open
-local APPS = { friends = Friends, gamenotes = Notes }
+local APPS = { friends = Friends, gamenotes = Notes, pokebank = PokeBank }
 local function appOn()
   if not (state.mode == "ds" and state.kind ~= "game" and state.L ~= nil) then return nil end
   for id, m in pairs(APPS) do
@@ -469,6 +470,9 @@ local function shoulderZone(L, x, y)
   local margin = math.max(L.bottom.x, L.top.x, L.W * 0.06)
   return (x < margin or x > L.W - margin) and math.abs(y - L.topH) < L.H * 0.25
 end
+
+-- (defined with the skins below; buttonAt and the pad routing reach it first)
+local skinActive
 
 local function buttonAt(x, y)
   if skinActive() then return nil end
@@ -663,6 +667,7 @@ local function press(btn, src)
     local Input = gameInput()
     if Input and Input.overlayPressed and GAME_BTN[btn] then Input:overlayPressed(GAME_BTN[btn]) end
   else
+    if skinActive() and PokeBank.isOpen() then appExit(PokeBank, PokeBank.button(btn)) return end
     if skinActive() then
       local action = SKIN_ACTION[btn]
       if action == "confirm" then
@@ -871,7 +876,7 @@ end
 -- A missing or broken skin.xml leaves skinModel nil and the 3DS clamshell
 -- draws instead, which is why every use goes through here rather than testing
 -- state.theme directly.
-local function skinActive()
+skinActive = function()
   return state.theme == "switch" and state.skinModel ~= nil
 end
 
@@ -926,7 +931,7 @@ local function onTouchPressed(id, x, y, dx, dy, pr)
   if skinActive() then
     local m = Skin.model and Skin.model()
     if m and m.mode == "full_screen" then
-      local L = Skin.layout and Skin.layout(love.graphics.getWidth(), love.graphics.getHeight())
+      local L = Skin.layout and Skin.layout(state.W or real.getWidth(), state.H or real.getHeight())
       local c = m.carousel
       local p = Skin.page and Skin.page(Skin.count(), Skin.selected(), m, m.baseW)
       if L and c and p and p.last >= p.first then
@@ -1062,7 +1067,7 @@ local function onMousePressed(x, y, button, istouch, presses)
     if skinActive() then
       local m = Skin.model and Skin.model()
       if m and m.mode == "full_screen" then
-        local L = Skin.layout and Skin.layout(love.graphics.getWidth(), love.graphics.getHeight())
+        local L = Skin.layout and Skin.layout(state.W or real.getWidth(), state.H or real.getHeight())
         local c = m.carousel
         local p = Skin.page and Skin.page(Skin.count(), Skin.selected(), m, m.baseW)
         if L and c and p and p.last >= p.first then
@@ -2476,7 +2481,7 @@ local function shellPreview(surf)
       if Theme3DS.active then
         local focus = Home.showing() and Home.barFocus()
         local banners = { downloadplay = "dlplay", eshop = "eshop", camera = "camera", settings = "settings",
-                          activity = "activity", friends = "friends", gamenotes = "gamenotes" }
+                          activity = "activity", friends = "friends", gamenotes = "gamenotes", pokebank = "pokebank" }
         drawTop3DS(cut, banners[focus or ""])
       else
         drawTopIdle(cut)
@@ -2623,6 +2628,8 @@ local function drawFrame()
     end
     skinGames()
     Skin.draw(W, H, "all")
+    -- emuPoke Bank, opened from the system row, over the whole screen
+    if PokeBank.isOpen() then PokeBank.drawSingle({ x = 0, y = 0, w = W, h = H }) end
     lg.pop()
     return
   end
@@ -2684,7 +2691,7 @@ local function drawFrame()
   elseif homeActive() and Home.showing() then
     local focus = Home.barFocus()
     local banners = { downloadplay = "dlplay", eshop = "eshop", camera = "camera", settings = "settings",
-                      activity = "activity", friends = "friends", gamenotes = "gamenotes" }
+                      activity = "activity", friends = "friends", gamenotes = "gamenotes", pokebank = "pokebank" }
     if Theme3DS.active then drawTop3DS(L.topCut, banners[focus or ""])
     else drawTopIdle(L.topCut) end
   else
@@ -3286,6 +3293,7 @@ function M.install()
   Sticker.init({ setCanvas = real.setCanvas, font = font })
   Camera.init({ font = font })
   Credits.init({ font = font })
+  PokeBank.init({ font = font, sfx = function(name) Sfx.play(name) end })
   Teardown.init({
     font = font,
     sfx = function(name) Sfx.play(name, true) end,
@@ -3396,8 +3404,37 @@ function M.install()
   -- events
   orig.touchpressed, orig.touchmoved, orig.touchreleased = love.touchpressed, love.touchmoved, love.touchreleased
   orig.mousepressed, orig.mousemoved, orig.mousereleased = love.mousepressed, love.mousemoved, love.mousereleased
-  love.touchpressed, love.touchmoved, love.touchreleased = onTouchPressed, onTouchMoved, onTouchReleased
-  love.mousepressed, love.mousemoved, love.mousereleased = onMousePressed, onMouseMoved, onMouseReleased
+  -- the Switch skin: emuPoke Bank takes the touches while it is open, and
+  -- the system row's buttons open what they name (app:pokebank)
+  local function skinApp(phase, id, x, y)
+    if not (skinActive() and state.kind ~= "game" and not emuOn()) then return false end
+    if PokeBank.isOpen() then
+      if phase == "pressed" then PokeBank.pressed(id, x, y)
+      elseif phase == "released" then appExit(PokeBank, PokeBank.released(id, x, y)) end
+      return true
+    end
+    if phase == "pressed" then
+      local L = Skin.layout and Skin.layout(state.W or real.getWidth(), state.H or real.getHeight())
+      local b = Skin.systemButtonAt and L and Skin.systemButtonAt(x, y, L)
+      if b and b.action == "pokebank" then PokeBank.open() return true end
+    end
+    return false
+  end
+  love.touchpressed = function(id, x, y, ...) if skinApp("pressed", id, x, y) then return end return onTouchPressed(id, x, y, ...) end
+  love.touchmoved = function(id, x, y, ...) if skinApp("moved", id, x, y) then return end return onTouchMoved(id, x, y, ...) end
+  love.touchreleased = function(id, x, y, ...) if skinApp("released", id, x, y) then return end return onTouchReleased(id, x, y, ...) end
+  love.mousepressed = function(x, y, b, istouch, ...)
+    if not istouch and skinApp("pressed", "mouse", x, y) then return end
+    return onMousePressed(x, y, b, istouch, ...)
+  end
+  love.mousemoved = function(x, y, dx, dy, istouch, ...)
+    if not istouch and PokeBank.isOpen() and skinActive() then return end
+    return onMouseMoved(x, y, dx, dy, istouch, ...)
+  end
+  love.mousereleased = function(x, y, b, istouch, ...)
+    if not istouch and skinApp("released", "mouse", x, y) then return end
+    return onMouseReleased(x, y, b, istouch, ...)
+  end
   -- typing a name or a comment in the Friend List
   local textinput, keypressed = love.textinput, love.keypressed
   love.textinput = function(t, ...)
@@ -3411,7 +3448,7 @@ function M.install()
     z = "a", ["return"] = "a", space = "a", x = "b", backspace = "b",
     c = "x", v = "y", escape = "start", tab = "select", q = "l", e = "r", h = "home" }
   local function shellKeys()
-    if nxOn() then return true end
+    if HomeNX.active() then return true end
     local id = appOn()
     return id == "manual"
   end

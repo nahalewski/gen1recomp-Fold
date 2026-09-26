@@ -571,6 +571,23 @@ function M.drawSystemRow(L)
   end
 end
 
+--- The system row's button under a screen point (the same places
+--- drawSystemRow draws them), with its action split as systemButtons() does.
+function M.systemButtonAt(x, y, L)
+  if not (model and model.systemRow and L) then return nil end
+  local sr = model.systemRow
+  local n = #model.system
+  local span = n * sr.size + (n - 1) * sr.spacing
+  local bx = (model.baseW - span) / 2
+  for i, b in ipairs(model.system) do
+    local rx, ry, rs = L.x(bx), L.y(sr.y), L.n(sr.size)
+    if x >= rx and x <= rx + rs and y >= ry and y <= ry + rs then
+      return M.systemButtons()[i]
+    end
+    bx = bx + sr.size + sr.spacing
+  end
+end
+
 function M.drawNavBar(L)
   local nb = model.navBar
   useFont("ButtonPrompt", L)
