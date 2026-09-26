@@ -55,7 +55,7 @@ import org.libsdl.app.SDLActivity;
  */
 final class FoldPlay {
     private static final String TAG = "FoldPlay";
-    private static final String SERVICE = "com.nahalewski.gen1recompfold.downloadplay";
+    private static final String SERVICE = "com.nahalewski.aeondx.downloadplay";
     private static final int PERMISSION_REQUEST = 7302;
 
     private static ConnectionsClient client;

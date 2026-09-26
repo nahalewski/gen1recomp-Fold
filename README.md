@@ -1,8 +1,11 @@
-# 3DSEmu
+# AeonDX
 
-Azahar, the 3DS emulator, opening on a 3DS HOME menu that also plays the
-gen1recomp games: see *3DS Fold* below.  Each push to `main` builds the
-APK and attaches it to the release numbered in `VERSION`.
+Azahar, the 3DS emulator, opening on a 3DS HOME menu that also plays DS
+(melonDS), GB / GBC / GBA (SkyEmu), Switch (Eden) and the gen1recomp
+games: see *3DS Fold* below.  Each push to `main` builds the APK
+(`AeonDX-<version>-build<n>` in the run's artifacts) and attaches it to
+the release numbered in `VERSION` (now `0.0.1-prerelease0.1`, a GitHub
+pre-release).  Bump `VERSION` to start the next release.
 
 # gen1recomp Fold
 
@@ -73,9 +76,8 @@ icons on the bottom screen.  Azahar is added to it:
 * **Nothing removed from Azahar.**  Every Azahar screen, setting and
   feature is still there.  They open from the folder instead of from
   Azahar's own home screen, which is no longer a launcher entry.
-* Same app id (`com.nahalewski.gen1recompfold`) and signing key
-  (`ci/debug.keystore`) as gen1recomp Fold, so it installs over it and
-  keeps the recomp saves.  arm64 only.
+* App id `com.nahalewski.aeondx`, signed with `ci/debug.keystore`.
+  arm64 only.
 
 How it fits together:
 
@@ -382,7 +384,7 @@ upstream's own Android build script.
 
 ## Build
 
-    ./apply.sh                    # debug APK, app id com.nahalewski.gen1recompfold
+    ./apply.sh                    # debug APK, app id com.nahalewski.aeondx
     ./apply.sh --release          # with upstream's signing variables set
 
 Needs the Android SDK (platform 36, build-tools 36, NDK 25.2.9519653) and

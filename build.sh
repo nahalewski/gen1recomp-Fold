@@ -114,12 +114,12 @@ fi
 # eShop icon and banner, fetched on the phone once; skipped when offline)
 python3 "$HERE/tools/make_nx_art.py" || true
 say "gen1recomp + fold3ds -> game.love"
-# build/gen1recomp is a BUILD tree: apply.sh re-applies patches/*.patch to it, and git apply
+# build/aeondx-game (upstream gen1recomp + fold3ds) is a BUILD tree: apply.sh re-applies patches/*.patch to it, and git apply
 # refuses a patch that is already in. Put tracked files back first so every build starts from
 # the pinned commit. Edits belong in patches/, not here - anything typed into this tree is lost.
-if [ -d "$B/gen1recomp/.git" ]; then git -C "$B/gen1recomp" reset -q --hard; fi
+if [ -d "$B/aeondx-game/.git" ]; then git -C "$B/aeondx-game" reset -q --hard; fi
 "$HERE/apply.sh" --package-only
-G="$B/gen1recomp"
+G="$B/aeondx-game"
 LOVE_MODULE="$G/mobile/android/love"
 GAME_LOVE="$G/mobile/android/app/src/embed/assets/game.love"
 [ -f "$GAME_LOVE" ] || { echo "no game.love at $GAME_LOVE" >&2; exit 1; }
@@ -131,6 +131,10 @@ checkout "$AZAHAR_REPO" "$AZAHAR_COMMIT" "$A"
 git -C "$A" submodule update -q --init --recursive --depth 1 --jobs 8 \
   || git -C "$A" submodule update -q --init --recursive --jobs 8
 for p in "$HERE"/azahar/patches/*.patch; do git -C "$A" apply "$p"; done
+# the APK's version name is AeonDX's release (VERSION), not Azahar's git describe
+AEONDX_VERSION="$(tr -d '[:space:]' < "$HERE/VERSION")"
+sed -i "s/versionName = getGitVersion()/versionName = \"$AEONDX_VERSION\"/" "$A/src/android/app/build.gradle.kts"
+sed -i 's/versionNameSuffix = "-vanilla"/versionNameSuffix = null/' "$A/src/android/app/build.gradle.kts"
 APP="$A/src/android/app/src/main"
 mkdir -p "$APP/java/org/citra/citra_emu/fold3ds" "$APP/assets" "$APP/res/xml"
 cp "$HERE"/azahar/java/org/citra/citra_emu/fold3ds/*.kt "$APP/java/org/citra/citra_emu/fold3ds/"
@@ -143,6 +147,8 @@ for d in "$GRES"/drawable-*; do
   cp "$d"/*.png "$APP/res/$(basename "$d")/"
 done
 cp "$GRES/xml/full_update_paths.xml" "$APP/res/xml/"
+# AeonDX's own icon and names win over gen1recomp's launcher art copied above
+cp -r "$HERE/azahar/res/." "$APP/res/"
 cp "$GAME_LOVE" "$APP/assets/game.love"
 linkdir "$LOVE_MODULE" "$A/src/android/love"
 # liblove for arm64 only, like the rest of the APK

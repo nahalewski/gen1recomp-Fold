@@ -1,10 +1,13 @@
-# Builds the 3DSEmu APK (Azahar + the 3DS HOME menu, see build.sh) on every
-# push to main, or by hand from the Actions tab, and attaches it to the
-# GitHub Release numbered in VERSION (a rebuild replaces that release's APK),
-# so it can be downloaded straight to the phone.  Signed
-# with ci/debug.keystore, the same fixed debug key 3dsfoldrecomp's builds use
-# (not a secret), so it installs over gen1recomp Fold and keeps its saves.
-name: Build 3DSEmu APK
+# Builds the AeonDX APK (Azahar + the 3DS HOME menu, see build.sh) on every
+# push to main, or by hand from the Actions tab.
+#
+# Versions: VERSION holds the release (0.0.1-prerelease0.1, ...).  Each build
+# uploads AeonDX-<version>-build<run>.apk as a workflow artifact, and the
+# GitHub Release v<version> (a pre-release while the version says
+# "prerelease") carries AeonDX-<version>.apk; a rebuild of the same version
+# replaces that APK.  Bump VERSION for the next release.  Signed with
+# ci/debug.keystore (a fixed debug key, not a secret).
+name: Build AeonDX APK
 
 on:
   push:
@@ -80,27 +83,30 @@ jobs:
         run: |
           version=$(tr -d '[:space:]' < VERSION)
           src=$(ls build/out/*.apk | head -1)
-          out="3DSEmu-${version}.apk"
+          out="AeonDX-${version}.apk"
           cp "$src" "$out"
+          cp "$src" "AeonDX-${version}-build${{ github.run_number }}.apk"
           echo "file=$out" >> "$GITHUB_OUTPUT"
+          echo "build=AeonDX-${version}-build${{ github.run_number }}.apk" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          case "$version" in *pre*|*alpha*|*beta*) echo "pre=true" >> "$GITHUB_OUTPUT" ;; *) echo "pre=false" >> "$GITHUB_OUTPUT" ;; esac
 
       - uses: actions/upload-artifact@v4
         with:
-          name: 3dsemu-apk
-          path: ${{ steps.apk.outputs.file }}
+          name: AeonDX-${{ steps.apk.outputs.version }}-build${{ github.run_number }}
+          path: ${{ steps.apk.outputs.build }}
 
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.apk.outputs.version }}
-          name: 3DSEmu ${{ steps.apk.outputs.version }}
+          name: AeonDX ${{ steps.apk.outputs.version }}
           body: |
-            Release ${{ steps.apk.outputs.version }}, built from ${{ github.sha }}.
-            Azahar (the 3DS emulator) opening on the 3DS HOME menu, with the
-            gen1recomp games and every 3DS game on its icons and Azahar's
-            settings in the Azahar folder.  Download the .apk below on the
-            phone and install it (it installs over gen1recomp Fold and keeps
-            its saves).
+            AeonDX ${{ steps.apk.outputs.version }} (build ${{ github.run_number }},
+            ${{ github.sha }}).  The 3DS HOME menu with Azahar (3DS), melonDS
+            (DS), SkyEmu (GB / GBC / GBA), Eden (Switch) and the gen1recomp
+            Pokémon games.  Download the .apk below on the phone and install it.
+            App id com.nahalewski.aeondx.
           files: ${{ steps.apk.outputs.file }}
-          make_latest: true
+          prerelease: ${{ steps.apk.outputs.pre }}
+          make_latest: ${{ steps.apk.outputs.pre == 'true' && 'false' || 'true' }}

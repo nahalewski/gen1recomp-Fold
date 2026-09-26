@@ -1,13 +1,12 @@
 # Where the code lives and who changes the UI
 
-**All code goes to https://github.com/nahalewski/3DSEmu, branch `main`**
+**All code goes to https://github.com/nahalewski/AeonDX, branch `main`**
+(it replaced 3DSEmu, which is frozen)
 (the user's rule).  There is one app with one UI: the 3DS HOME menu.
 Every emulator (Azahar for 3DS, melonDS for DS, SkyEmu for GB / GBC /
 GBA as Virtual Console) plugs into it through `fold3ds/emus.lua`.  Each
 emulator's settings and tools are in its own folder tile on the HOME
-menu (the `folder` of its provider).  `pixel-fold` on gen1recomp-Fold is
-only a mirror now; don't develop there.  Before each push to 3DSEmu,
-fetch its `main` and merge it.
+menu (the `folder` of its provider).  Before each push to AeonDX, fetch its `main` and merge it.
 
 
 The user's rule: **only the 3DS UI session changes the UI.**
@@ -43,9 +42,9 @@ screen or button), don't edit UI files. Ask the UI session:
 
 - make a one-shot Routine (`create_trigger` with
   `persistent_session_id = session_01B82yRgmRopEVZPmBZUARQa`), or
-- add a line to `notes/ui-requests.md` on 3DSEmu `main`.
+- add a line to `notes/ui-requests.md` on AeonDX `main`.
 
 Say what data or function it should call. The UI session builds it and
 replies.
 
-Always merge 3DSEmu `main` before pushing.
+Always merge AeonDX `main` before pushing.

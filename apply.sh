@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Builds the G1R Fold APK: upstream gen1recomp's own Android app plus the
 # fold3ds layer.  Needs the Android SDK (API 36, build-tools 36, NDK
-# 25.2.9519653), a JDK, git and python3.  Output: build/gen1recomp/dist/android/debug/*.apk
+# 25.2.9519653), a JDK, git and python3.  Output: build/aeondx-game/dist/android/debug/*.apk
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 UPSTREAM_COMMIT="${UPSTREAM_COMMIT:-c8b64177f60f94d8e052445f36fbd09550e73c48}"
 mkdir -p "$HERE/build"
-if [ ! -d "$HERE/build/gen1recomp/.git" ]; then
-  git clone https://github.com/bryanthaboi/gen1recomp.git "$HERE/build/gen1recomp"
+if [ ! -d "$HERE/build/aeondx-game/.git" ]; then
+  git clone https://github.com/bryanthaboi/gen1recomp.git "$HERE/build/aeondx-game"
 fi
-cd "$HERE/build/gen1recomp"
+cd "$HERE/build/aeondx-game"
 git fetch -q origin "$UPSTREAM_COMMIT" 2>/dev/null || true
 git checkout -q "$UPSTREAM_COMMIT"
 J=mobile/android/love/src/jni/love/src
@@ -57,6 +57,6 @@ s = s.replace("main.lua conf.lua src data assets tools/save-editor \\", "main.lu
 s = s.replace("-x 'data/generated/*' -x 'assets/generated/*')", "-x 'data/generated/*' -x 'assets/generated/*' -x 'fold3ds/dev/*' -x 'fold3ds/homesprites/*')")
 p.write_text(s)
 PY
-export GEN1RECOMP_ANDROID_APPLICATION_ID="${GEN1RECOMP_ANDROID_APPLICATION_ID:-com.nahalewski.gen1recompfold}"
+export GEN1RECOMP_ANDROID_APPLICATION_ID="${GEN1RECOMP_ANDROID_APPLICATION_ID:-com.nahalewski.aeondx}"
 export GEN1RECOMP_ANDROID_APP_NAME="${GEN1RECOMP_ANDROID_APP_NAME:-AeonDX}"
 bash scripts/build_android.sh "$@"

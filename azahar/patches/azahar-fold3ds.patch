@@ -26,8 +26,8 @@ index d873af1..55b7c55 100644
          // The application ID refers to Lime3DS to allow for
          // the Play Store listing, which was originally set up for Lime3DS, to still be used.
 -        applicationId = "org.azahar_emu.azahar"
-+        // fold3ds: the gen1recomp Fold app's id, so this installs over it and keeps its saves
-+        applicationId = "com.nahalewski.gen1recompfold"
++        // fold3ds: AeonDX's own app id
++        applicationId = "com.nahalewski.aeondx"
 +        // the LÖVE module's flavours: its game.love comes embedded in this app
 +        missingDimensionStrategy("mode", "embed")
          minSdk = 29

@@ -2,6 +2,8 @@
 <resources>
     <!-- the app's name on the phone's launcher -->
     <string name="fold3ds_app_name" translatable="false">AeonDX</string>
+    <!-- the launcher icon's tile behind the logo -->
+    <color name="aeondx_icon_bg">#FF121418</color>
 
     <!-- Fold3dsLinkActivity: nothing of its own shows, only the dialogs and
          pickers it opens, over the 3DS HOME menu -->

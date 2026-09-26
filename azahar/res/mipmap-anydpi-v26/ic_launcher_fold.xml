@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- gen1recomp Fold's launcher icon (gen1recomp's own art, copied in by build.sh) -->
+<!-- AeonDX's launcher icon: the logo (drawable-*/ic_launcher_foreground.png)
+     on the dark tile the legacy icon (drawable-*/ic_launcher.png) uses -->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <background android:drawable="@drawable/ic_launcher_foreground" />
+    <background android:drawable="@color/aeondx_icon_bg" />
     <foreground android:drawable="@drawable/ic_launcher_foreground" />
 </adaptive-icon>
