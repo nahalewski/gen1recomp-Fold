@@ -55,6 +55,7 @@ local Pads = require("fold3ds.pads")
 local Friends = require("fold3ds.friends")
 local EmuPlay = require("fold3ds.emuplay")
 local EmuPage = require("fold3ds.emupage")
+local Credits = require("fold3ds.credits")
 local Emus = require("fold3ds.emus")
 local SkinManager = require("fold3ds.skinmanager")
 -- superseded by fold3ds.skin, not drawn; optional (it may not be in the
@@ -334,7 +335,9 @@ end
 
 -- an emulator's settings page (from its folder) owns both screens
 local function pageOn()
-  return state.mode == "ds" and state.kind ~= "game" and state.L ~= nil and EmuPage.active() ~= nil
+  -- Credits (from any settings menu) draws and takes input through EmuPage
+  return state.mode == "ds" and state.kind ~= "game" and state.L ~= nil
+    and (Credits.isOpen() or EmuPage.active() ~= nil)
 end
 
 -- the Activity Log owns both screens while it is open (launcher only)
@@ -2640,7 +2643,8 @@ local function drawFrame()
     EmuPlay.drawTop(L.topCut, state.screenMode ~= "gbc")
   elseif pageOn() then
     local P = select(1, EmuPage.active())
-    drawTop3DS(L.topCut, "emupage:" .. P.id)
+    if Credits.isOpen() or not P then Credits.drawTop(L.topCut)
+    else drawTop3DS(L.topCut, "emupage:" .. P.id) end
   elseif cameraOn() then
     Camera.drawTop(L.topCut)
   elseif Sticker.editing() then
@@ -3127,6 +3131,19 @@ local function aboutSection(imp)
   return { title = S("About"), rows = rows }
 end
 
+-- the last section of Settings: Credits (fold3ds/credits.lua)
+local function creditsSection(imp)
+  return { title = "Credits", rows = {
+    { label = "AI Slop Productions and every emulator in AeonDX", actionLabel = "Open",
+      action = function()
+        if imp._closeSettings then imp:_closeSettings() end
+        Credits.open()
+        Sfx.play("open")
+        return false
+      end },
+  } }
+end
+
 -- the 3DS shell & Switch options
 local function controlsSection()
   local okS, Strings = pcall(require, "src.core.Strings")
@@ -3208,6 +3225,7 @@ local function wrapSettings()
       pcall(function()
         model.sections[#model.sections + 1] = controlsSection()
         model.sections[#model.sections + 1] = aboutSection(self)
+        model.sections[#model.sections + 1] = creditsSection(self)
       end)
     end
     return r
@@ -3221,6 +3239,7 @@ function M.install()
   loadSkin()   -- the theme is known now; a failure here falls back to the 3DS shell
   Sticker.init({ setCanvas = real.setCanvas, font = font })
   Camera.init({ font = font })
+  Credits.init({ font = font })
   Dlplay.init({ font = font, subject = function() return state.subject end })
   Activity.init({ font = font, drawIcon = function(id, x, y, s)
     if not Home.drawIconFor(state.subject, id, x, y, s) then

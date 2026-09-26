@@ -51,6 +51,7 @@ local SETTINGS = {
   { id = "home", name = "HOME Menu" },
   { id = "controllers", name = "Controllers" },
   { id = "more", name = "Other Settings" },
+  { id = "credits", name = "Credits" },
 }
 
 local ctx
@@ -112,6 +113,7 @@ local NSO_BY = {}
 for _, a in ipairs(NSO) do NSO_BY[a.sys] = a end
 local Emus = require("fold3ds.emus")
 local Sfx = require("fold3ds.sfx")
+local Credits = require("fold3ds.credits")
 
 local function sysOf(t)
   if t.system then return t.system end
@@ -556,6 +558,14 @@ local function drawSettings(F, T)
   local ox, ow = F.x + lw + 50 * s, F.w - lw - 110 * s
   local cat = SETTINGS[S.cat].id
   local opts = {}
+  if cat == "credits" then
+    -- the card and the list fill the pane (fold3ds/credits.lua)
+    if S.creditsFor ~= S.cat then S.creditsFor = S.cat; Credits.restart() end
+    S.opts = {}
+    Credits.drawPanel(ox, top + 24 * s, ow, bottom - top - 36 * s)
+    return
+  end
+  S.creditsFor = nil
   if cat == "themes" then
     opts = { { id = "white", name = "Basic White", on = st.theme == "white" },
              { id = "black", name = "Basic Black", on = st.theme == "black" } }
@@ -730,6 +740,8 @@ function X.button(imp, name)
   if S then
     if name == "b" or name == "home" then
       if S.focus == "opts" then S.focus = "cats" else st.settings = nil end
+    elseif (name == "up" or name == "down") and S.focus == "opts" and SETTINGS[S.cat].id == "credits" then
+      Credits.button(name)
     elseif name == "up" or name == "down" then
       local d = name == "down" and 1 or -1
       if S.focus == "cats" then S.cat = clamp(S.cat + d, 1, #SETTINGS); S.opt = 1

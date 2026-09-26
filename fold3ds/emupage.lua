@@ -7,12 +7,14 @@
 --   action rows  { action, label, sub }  -> p.act(action)
 --   info rows    { info = true, label }
 -- B / HOME / Back close it (p.closePage()).  Any emulator with page() gets
--- this; Azahar opens its own settings screens instead.
+-- this; Azahar opens its own settings screens instead.  Every page ends with
+-- Credits (fold3ds/credits.lua), which takes both screens while it is open.
 local EPG = {}
 
 local lg = love.graphics
 local Emus = require("fold3ds.emus")
 local Sfx = require("fold3ds.sfx")
+local Credits = require("fold3ds.credits")
 
 local ctx
 local st = { hits = {}, touches = {}, sel = 1, scroll = 0, pageId = nil, text = nil, maxScroll = 0 }
@@ -33,6 +35,12 @@ function EPG.active()
       local ok, pg = pcall(p.page)
       if ok and type(pg) == "table" then
         if pg.id ~= st.pageId then st.pageId, st.sel, st.scroll, st.text = pg.id, 1, 0, nil end
+        pg.rows = pg.rows or {}
+        local last = pg.rows[#pg.rows]
+        if not (last and last.credits) then
+          pg.rows[#pg.rows + 1] = { credits = true, action = "credits", label = "Credits",
+            sub = "AI Slop Productions and every emulator in AeonDX" }
+        end
         return p, pg
       end
     end
@@ -57,6 +65,7 @@ local function hit(id, x, y, w, h) st.hits[#st.hits + 1] = { id = id, x = x, y =
 -- the top screen: the folder's banner is drawn by init.lua (appletBanner);
 -- here the page's title and the picked row's explanation
 function EPG.drawTop(r)
+  if Credits.isOpen() then Credits.drawTop(r) return end
   local p, pg = EPG.active()
   if not p then return end
   lg.push("all")
@@ -131,8 +140,9 @@ local function drawText(r)
 end
 
 function EPG.drawBottom(r)
-  local p, pg = EPG.active()
   st.hits = {}
+  if Credits.isOpen() then Credits.drawBottom(r) return end
+  local p, pg = EPG.active()
   if not p then return end
   lg.push("all")
   lg.setScissor(r.x, r.y, r.w, r.h)
@@ -242,7 +252,8 @@ local function activateRow(p, pg, i)
   local row = pg.rows[i]
   if not row then return end
   st.sel = i
-  if row.choices then setChoice(p, row, 1)
+  if row.credits then Credits.open(); Sfx.play("open")
+  elseif row.choices then setChoice(p, row, 1)
   elseif row.text then startText(row)
   elseif row.action and p.act then
     Sfx.play("open")
@@ -284,11 +295,13 @@ local function hitAt(x, y)
 end
 
 function EPG.pressed(id, x, y)
+  if Credits.isOpen() then Credits.pressed(id, x, y) return end
   local h = hitAt(x, y)
   st.touches[id] = { hit = h and h.id, y0 = y, y = y, scroll = st.scroll, moved = false }
 end
 
 function EPG.moved(id, x, y)
+  if Credits.isOpen() then Credits.moved(id, x, y) return end
   local t = st.touches[id]
   if not t then return end
   if math.abs(y - t.y0) > 8 then t.moved = true end
@@ -296,6 +309,10 @@ function EPG.moved(id, x, y)
 end
 
 function EPG.released(id, x, y)
+  if Credits.isOpen() then
+    if Credits.released(id, x, y) == "exit" then Sfx.play("back") end
+    return
+  end
   local t = st.touches[id]
   st.touches[id] = nil
   local p, pg = EPG.active()
@@ -305,6 +322,10 @@ function EPG.released(id, x, y)
 end
 
 function EPG.button(btn)
+  if Credits.isOpen() then
+    if Credits.button(btn) == "exit" then Sfx.play("back") end
+    return true
+  end
   local p, pg = EPG.active()
   if not p then return false end
   if st.text then
