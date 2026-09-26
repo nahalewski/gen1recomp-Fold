@@ -331,6 +331,48 @@ Each is a separate command in the root helper, so a failure names the step.
 
 Next: rerun the probe with `iw` installed for the capability list.
 
+### iw capability results (test 1, passed)
+
+Two separate Wi-Fi devices on the phone, and the second is the one to use:
+
+* **phy#1 (`wonder`, the `wonder.ko` module on mac80211)** — this is the
+  wondertap radio, and it has exactly what LDN needs:
+  - interface modes include **monitor** (already an interface, `wondertap0`,
+    type monitor) and IBSS/managed/NAN;
+  - extended features include **`CONTROL_PORT_OVER_NL80211`** and
+    `CONTROL_PORT_OVER_NL80211_TX_STATUS` and `CONTROL_PORT_NO_PREAUTH` — so
+    the 0x88B7 authentication frames CAN go over nl80211 here (no AF_PACKET
+    needed), `EXT_KEY_ID`, `CAN_REPLACE_PTK0`;
+  - commands: `authenticate`, `associate`, `deauthenticate`, `new_key`,
+    `new_station`, `remain_on_channel`, `frame`, `connect`, `set_channel`,
+    `register_beacons`, `testmode`.
+  This is a full mac80211 SoftMAC-style interface, i.e. the same surface
+  kinnay/LDN targets on a PC.  It does NOT list the firmware 4-way offload,
+  so it will not fight us over the handshake.
+* **phy#0/bcmdhd (`wlan0`)** — the normal FullMAC path: `connect`,
+  `new_key`, `remain_on_channel`, `frame`, but its extended features include
+  `4WAY_HANDSHAKE_STA_PSK`/`_1X` and `SAE_OFFLOAD`, i.e. the firmware wants to
+  run the handshake.  This is the harder path; we do not need it.
+
+So the plan simplifies: **use the `wonder` phy (wondertap), not `wlan0`.**
+It is a mac80211 device that already does monitor mode and control-port
+frames over nl80211, which removes the two hardest unknowns from the earlier
+analysis (raw key path and 0x88B7 transport).  `wlan0` stays on the normal
+network the whole time, so the phone keeps its Wi-Fi.
+
+Revised on-phone tests, all on `wonder`/`wondertap0` (root):
+1. (done) capabilities present.
+2. `wondertap0` up, hop 1/6/11, capture Nintendo action frames (OUI
+   `00:22:aa`) near a Switch hosting FireRed's Union Room.
+3. add a managed interface on the `wonder` phy (or reuse it), `authenticate`
+   + `associate` to the room's BSSID with LDN's RSN IE.
+4. `new_key` pairwise+group CCMP; send/receive the LDN authentication over
+   the nl80211 control port; confirm it decrypts.
+5. static 169.254/24 + neighbours + UDP 12345; Pia flows.
+
+`wlan0` is on channel 161 (the home AP) and stays there; the whole bridge
+lives on the `wonder` phy, on 2.4 GHz channel 1/6/11 where LDN runs.
+
 ## Known blockers (honest list)
 
 1. **Pixel Wi-Fi driver** (see the BCM4390 section above for what the
