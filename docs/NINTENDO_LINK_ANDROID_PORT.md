@@ -312,6 +312,25 @@ behaviour, answered by these tests on the phone, in order:
 
 Each is a separate command in the root helper, so a failure names the step.
 
+### Probe results from the user's phone (tools/nintendo_link/probe.sh)
+
+* Build: `google/comet_beta/comet:17/CP41.260831.007`, kernel
+  `6.12.81-android16-6`, Magisk root, SELinux enforcing.
+* Loaded modules: `bcmdhd4390`, **`wonder`** (on top of `mac80211`),
+  `wlan_ptracker`, `cfg80211`.  Firmware files `fw_bcmdhd.bin_4390_{a0,b0,b1}`
+  with matching CLM blobs.
+* Wireless interfaces: `wlan0` (up, the normal connection), `wlan1` (down),
+  `aware_nmi0` (Wi-Fi Aware), and **`wondertap0`** (down, link type 803 =
+  802.11 + radiotap) plus a `wonder` phy.  So the wondertap path
+  mosey-extended describes is present on this phone as a separate `wonder`
+  module, not in `bcmdhd4390`'s source.
+* `dhd_use_idsup` is not exposed under `/sys/module/bcmdhd4390/parameters`
+  (the in-dongle supplicant setting has to be read through the driver).
+* `iw` was not installed, so the nl80211 capability list (test 1's main
+  output) is still missing; `dmesg` had no driver lines at that moment.
+
+Next: rerun the probe with `iw` installed for the capability list.
+
 ## Known blockers (honest list)
 
 1. **Pixel Wi-Fi driver** (see the BCM4390 section above for what the
