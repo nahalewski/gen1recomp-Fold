@@ -12,6 +12,8 @@
 --   p.touch(phase, u, v)            DS bottom screen, 0..1
 --   p.menu() -> { open, rows = {{label, id}}, sel }, p.menuDo(id)
 --   p.boxArt(t) -> Image, p.stop()
+--   p.link(t), p.linkDo(action, arg)  optional: Game Link (fold3ds/gamelink.lua)
+--                                     adds its row to the pause menu
 --
 -- The screens: FULL SCREEN stretches the game over the whole screen (the
 -- 3DS top panel, the bottom screen); NATIVE keeps its own shape at whole
@@ -21,6 +23,7 @@ local EP = {}
 local lg = love.graphics
 local Emus = require("fold3ds.emus")
 local Sfx = require("fold3ds.sfx")
+local GameLink = require("fold3ds.gamelink")
 
 local ctx
 local st = { hits = {}, touches = {}, screenRect = nil }
@@ -134,16 +137,33 @@ local function pill(id, x, y, w, h, label, on)
 end
 
 -- the emulator's pause menu (HOME), 3DS style, over the bottom screen
-local function drawMenu(r, m)
+-- the pause menu's rows, with Game Link after Resume when the game links
+local function menuRows(p, t, m)
+  local rows = m.rows or {}
+  if not GameLink.linkable(p, t) then return rows end
+  local out = {}
+  for i, row in ipairs(rows) do
+    out[#out + 1] = row
+    if i == 1 then out[#out + 1] = { label = "Game Link", id = "gamelink" } end
+  end
+  return out
+end
+
+local function drawMenu(r, m, p, t)
   lg.setColor(0, 0, 0, 0.55)
   lg.rectangle("fill", r.x, r.y, r.w, r.h)
-  local rows = m.rows or {}
+  local rows = menuRows(p, t, m)
+  -- the provider's pick, shifted past the Game Link row
+  local sel = m.sel
+  if #rows > #(m.rows or {}) then
+    sel = st.onLink and 2 or ((m.sel or 1) > 1 and m.sel + 1 or m.sel)
+  end
   local rh = math.min(r.h * 0.13, (r.h * 0.8) / math.max(1, #rows))
   local w = r.w * 0.6
   local x = r.x + (r.w - w) / 2
   local y = r.y + (r.h - rh * #rows * 1.15) / 2
   for i, row in ipairs(rows) do
-    pill("menu:" .. tostring(row.id or row[2]), x, y, w, rh, tostring(row.label or row[1]), m.sel == i)
+    pill("menu:" .. tostring(row.id or row[2]), x, y, w, rh, tostring(row.label or row[1]), sel == i)
     y = y + rh * 1.15
   end
 end
@@ -262,7 +282,8 @@ function EP.drawBottom(r, fullScreen)
     end
   end
   local m = p.menu and select(2, pcall(p.menu))
-  if type(m) == "table" and m.open then drawMenu(r, m) end
+  if type(m) == "table" and m.open then drawMenu(r, m, p, t) end
+  if GameLink.isOpen() then GameLink.draw(r) end
   lg.pop()
 end
 
@@ -459,7 +480,13 @@ function EP.drawSwitchFullScreen(W, H)
   local m = p.menu and select(2, pcall(p.menu))
   if type(m) == "table" and m.open then
     local r = st.screenRect or { x = 0, y = 0, w = W, h = H }
-    drawMenu(r, m)
+    drawMenu(r, m, p, select(2, EP.active()))
+  end
+  if GameLink.isOpen() then
+    -- the Switch skin: the panel in the middle of the screen
+    local w = math.min(W * 0.9, H * 1.35)
+    local h = w * 0.75
+    GameLink.draw({ x = (W - w) / 2, y = (H - h) / 2, w = w, h = h })
   end
 end
 
@@ -475,6 +502,29 @@ end
 function EP.press(btn)
   local p = EP.active()
   if not p then return false end
+  if GameLink.isOpen() then GameLink.button(btn) return true end
+  -- the pause menu with a Game Link row the provider doesn't know about:
+  -- it sits under the first row
+  local t = select(2, EP.active())
+  local m = p.menu and select(2, pcall(p.menu))
+  if type(m) == "table" and m.open and GameLink.linkable(p, t) then
+    if st.onLink then
+      if btn == "a" then
+        st.onLink = false
+        if p.menuDo then pcall(p.menuDo, "resume") end
+        GameLink.open(p, t)
+        Sfx.play("open")
+        return true
+      elseif btn == "up" then st.onLink = false; Sfx.play("over") return true
+      elseif btn == "down" then st.onLink = false end
+    elseif btn == "down" and (m.sel or 1) == 1 then
+      st.onLink = true
+      Sfx.play("over")
+      return true
+    end
+  else
+    st.onLink = false
+  end
   if p.press then pcall(p.press, btn) end
   return true
 end
@@ -482,6 +532,7 @@ end
 function EP.release(btn)
   local p = EP.active()
   if not p then return false end
+  if GameLink.isOpen() then return true end
   if p.release then pcall(p.release, btn) end
   return true
 end
@@ -495,7 +546,12 @@ local function toScreen(x, y)
 end
 
 local function activate(p, id)
-  if id:match("^menu:") then
+  if id == "menu:gamelink" then
+    -- close the pause menu, open the panel
+    if p.menuDo then pcall(p.menuDo, "resume") end
+    GameLink.open(p, select(2, EP.active()))
+    Sfx.play("open")
+  elseif id:match("^menu:") then
     if p.menuDo then pcall(p.menuDo, id:sub(6)) end
     Sfx.play("select")
   elseif id == "vc:close" or id == "switch:close" then
@@ -514,6 +570,7 @@ end
 function EP.touch(phase, id, x, y)
   local p = EP.active()
   if not p then return false end
+  if GameLink.isOpen() then GameLink.touch(phase, id, x, y) return true end
   local m = p.menu and select(2, pcall(p.menu))
   local menuOpen = type(m) == "table" and m.open
   if phase == "pressed" then
@@ -574,6 +631,9 @@ function EP.touch(phase, id, x, y)
   return true
 end
 
-function EP.init(context) ctx = context end
+function EP.init(context)
+  ctx = context
+  GameLink.init({ font = context.font, sfx = function(n) Sfx.play(n) end })
+end
 
 return EP
