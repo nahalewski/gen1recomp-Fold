@@ -56,6 +56,7 @@ local Friends = require("fold3ds.friends")
 local EmuPlay = require("fold3ds.emuplay")
 local EmuPage = require("fold3ds.emupage")
 local Credits = require("fold3ds.credits")
+local Teardown = require("fold3ds.teardown")
 local Emus = require("fold3ds.emus")
 local SkinManager = require("fold3ds.skinmanager")
 -- superseded by fold3ds.skin, not drawn; optional (it may not be in the
@@ -191,6 +192,7 @@ local function loadSettings()
   state.cartSkin = text:match("cart_skin=(%w+)") or "solid3d"
   Cart3D.style = state.cartSkin
   state.bottomShell = text:match("bottom_shell=(%w+)") or "default"
+  state.shakeEgg = text:match("shake_egg=(%d)") ~= "0"
   if love.audio and love.audio.setVolume then pcall(love.audio.setVolume, state.volume) end
   Sfx.enabled = state.sounds
 end
@@ -203,6 +205,7 @@ local function saveSettings()
     .. "\ncarts=" .. Cart3D.region
     .. "\ncart_skin=" .. tostring(state.cartSkin or "solid3d")
     .. "\nbottom_shell=" .. tostring(state.bottomShell or "default")
+    .. "\nshake_egg=" .. (state.shakeEgg == false and "0" or "1")
     .. ("\nctrl_opacity=%.2f"):format(state.controlOpacity or 0.65) .. "\n")
 end
 
@@ -2535,6 +2538,18 @@ local function coverEditRects(W, H)
   return { x = 0, y = 0, w = W, h = ph }, { x = 0, y = ph, w = W, h = H - ph }
 end
 
+local function drawLidWall(W, H)
+  lg.push()
+  if H > W * 1.1 then
+    lg.translate(W, 0)
+    lg.rotate(math.pi / 2)
+    drawWall(WALL_LID, H, W)
+  else
+    drawWall(WALL_LID, W, H)
+  end
+  lg.pop()
+end
+
 local function drawLid(W, H)
   if Sticker.editing() then
     local prev, tools = coverEditRects(W, H)
@@ -2544,26 +2559,33 @@ local function drawLid(W, H)
     Sticker.drawEditor(tools)
     return
   end
+  -- the teardown Easter egg: the top cover off, its parts on the screen
+  if Teardown.active() and Teardown.draw(W, H) then return end
   lg.setColor(0.16, 0.16, 0.17, 1)
   lg.rectangle("fill", 0, 0, W, H)
   -- the black wallpaper behind the closed lid, turned with it
   local portrait = H > W * 1.1
+  drawLidWall(W, H)
+  -- shaken: the lid rattles a little more with every hard shake
+  local jx, jy, jr = Teardown.wobble()
   lg.push()
-  if portrait then
-    lg.translate(W, 0)
-    lg.rotate(math.pi / 2)
-    drawWall(WALL_LID, H, W)
-  else
-    drawWall(WALL_LID, W, H)
-  end
-  lg.pop()
+  lg.translate(W / 2 + jx, H / 2 + jy)
+  lg.rotate(jr)
+  lg.translate(-W / 2, -H / 2)
   drawLidIn(0, 0, W, H, portrait, true)
+  lg.pop()
   Sticker.eyeGlint(state.time)
 end
 
 -- a touch on the cover: the sticker maker while it is open there, else the
 -- stickers themselves (the right camera lens opens the maker)
 coverTouch = function(phase, id, x, y)
+  if Teardown.active() then
+    if phase == "pressed" then Teardown.pressed(id, x, y)
+    elseif phase == "moved" then Teardown.moved(id, x, y)
+    else Teardown.released(id, x, y) end
+    return
+  end
   if Sticker.editing() then
     local prev, tools = coverEditRects(state.W or real.getWidth(), state.H or real.getHeight())
     if phase == "pressed" then Sticker.pressed(id, x, y, tools, prev)
@@ -2821,6 +2843,23 @@ function backend:update(dt)
       if ok and gx and math.sqrt(gx * gx + gy * gy + (gz or 0) ^ 2) > 2.4 then Cart3D.kick(state.time) end
       local ok2, ax, ay = pcall(S.read, "accelerometer")
       if ok2 and ax then Cart3D.setTilt(-ax / 9.8, ay / 9.8 - 0.5) end
+    end
+  end
+  -- the shut phone shaken hard, again and again: the teardown Easter egg
+  if state.mode == "lid" and state.shakeEgg ~= false and not Teardown.active() then
+    if state.sensors == nil then
+      local ok, S = pcall(require, "src.core.Sensors")
+      state.sensors = ok and S or false
+    end
+    if state.sensors then
+      local ok, ax, ay, az = pcall(state.sensors.read, "accelerometer")
+      if ok and ax then Teardown.feed(ax, ay, az) end
+    end
+    if os.getenv("POKEPORT_FOLD_TEARDOWN") and not state.teardownTested then
+      state.teardownTested = true
+      Teardown.start()
+      if os.getenv("POKEPORT_FOLD_TEARDOWN") == "solve" then Teardown.autoSolve(2.5) end
+      if os.getenv("POKEPORT_FOLD_TEARDOWN") == "lcd" then Teardown.debugFace("lcd") end
     end
   end
   -- today's steps for the top screen (every few seconds, 3DS theme only)
@@ -3172,6 +3211,13 @@ local function controlsSection()
         state.controlOpacity = map[v] or 0.65
         saveSettings()
       end },
+    { label = S("Shake the closed phone to open its top cover"),
+      choices = { { value = "on", label = S("On") }, { value = "off", label = S("Off") } },
+      selected = function() return state.shakeEgg == false and "off" or "on" end,
+      select = function(v)
+        state.shakeEgg = v == "on"
+        saveSettings()
+      end },
     { label = S("L / ZL / R / ZR buttons"),
       choices = { { value = "on", label = S("On") }, { value = "off", label = S("Off") } },
       selected = function() return state.shoulders and "on" or "off" end,
@@ -3240,6 +3286,18 @@ function M.install()
   Sticker.init({ setCanvas = real.setCanvas, font = font })
   Camera.init({ font = font })
   Credits.init({ font = font })
+  Teardown.init({
+    font = font,
+    sfx = function(name) Sfx.play(name, true) end,
+    bootTop = function(r, t) drawAeonTop(r, t, 1) end,
+    setCanvas = real.setCanvas,
+    lidImage = function() return image(LID) end,
+    lidBox = LID_BOX,
+    drawWall = drawLidWall,
+    volume = function() return state.volume or 1 end,
+    -- back to the app's own lock (update() sets landscape once at start)
+    unlock = function() pcall(function() require("src.core.Orientation").apply("landscape") end) end,
+  })
   Dlplay.init({ font = font, subject = function() return state.subject end })
   Activity.init({ font = font, drawIcon = function(id, x, y, s)
     if not Home.drawIconFor(state.subject, id, x, y, s) then
